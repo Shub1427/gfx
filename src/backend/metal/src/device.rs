@@ -296,6 +296,61 @@ impl Device {
         arg
     }
 
+    fn create_compute_pipeline<'a>(
+        &self,
+        pipeline_desc: &pso::ComputePipelineDesc<'a, Backend>,
+    ) -> Result<n::ComputePipeline, pso::CreationError> {
+        let pipeline = metal::ComputePipelineDescriptor::new();
+        let pipeline_layout = &pipeline_desc.layout;
+
+        // Compute shader
+        let cs_entries_owned;
+        let (cs_lib, cs_remapped_entries) = match pipeline_desc.shader.module {
+            &n::ShaderModule::Compiled {ref library, ref remapped_entry_point_names} => (library.to_owned(), remapped_entry_point_names),
+            &n::ShaderModule::Raw(ref data) => {
+                //TODO: cache them all somewhere!
+                let raw = self.compile_shader_library(data, &pipeline_layout.res_overrides).unwrap();
+                cs_entries_owned = raw.1;
+                (raw.0, &cs_entries_owned)
+            }
+        };
+        let cs_entry = if cs_remapped_entries.contains_key(pipeline_desc.shader.entry) {
+            cs_remapped_entries.get(pipeline_desc.shader.entry).unwrap()
+        } else {
+            pipeline_desc.shader.entry
+        };
+
+        let cs_constants = if pipeline_desc.shader.specialization.is_empty() {
+            None
+        } else {
+            Some(create_function_constants(pipeline_desc.shader.specialization))
+        };
+        
+        let mtl_compute_function = cs_lib
+            .get_function(cs_entry, cs_constants)
+            .map_err(|_| {
+                error!("invalid compute shader entry point");
+                pso::CreationError::Other
+            })?;
+        pipeline.set_compute_function(Some(&mtl_compute_function));
+
+        let mut err_ptr: *mut ObjcObject = ptr::null_mut();
+        let pso: *mut metal::MTLComputePipelineState = unsafe {
+            msg_send![&*self.device, newComputePipelineStateWithDescriptor:&*pipeline error: &mut err_ptr]
+        };
+
+        if pso.is_null() {
+            error!("PSO creation failed: {}", unsafe { n::objc_err_description(err_ptr) });
+            unsafe { msg_send![err_ptr, release] };
+            Err(pso::CreationError::Other)
+        } else {
+            Ok(n::ComputePipeline {
+                cs_lib,
+                raw: unsafe { metal::ComputePipelineState::from_ptr(pso) }
+            })
+        }
+    }
+
     fn create_graphics_pipeline<'a>(
         &self,
         pipeline_desc: &pso::GraphicsPipelineDesc<'a, Backend>,
@@ -630,9 +685,13 @@ impl hal::Device<Backend> for Device {
 
     fn create_compute_pipelines<'a>(
         &self,
-        _pipelines: &[pso::ComputePipelineDesc<'a, Backend>],
+        params: &[pso::ComputePipelineDesc<'a, Backend>],
     ) -> Vec<Result<n::ComputePipeline, pso::CreationError>> {
-        unimplemented!()
+        let mut output = Vec::with_capacity(params.len());
+        for param in params {
+            output.push(self.create_compute_pipeline(param));
+        }
+        output
     }
 
     fn create_framebuffer(
@@ -807,7 +866,6 @@ impl hal::Device<Backend> for Device {
                         .find(|layout| layout.binding == write.binding)
                         .expect("invalid descriptor set binding index")
                         .clone();
-
                     match (&write.write, set.bindings.get_mut(&write.binding)) {
                         (&Sampler(ref samplers), Some(&mut n::DescriptorSetBinding::Sampler(ref mut vec))) => {
                             if write.array_offset + samplers.len() > layout.count {
@@ -832,6 +890,9 @@ impl hal::Device<Backend> for Device {
                             }
                         },
                         (&Sampler(_), _) | (&SampledImage(_), _) => panic!("mismatched descriptor set type"),
+                        (&StorageBuffer(_), _) => {
+                            // TODO
+                        },
                         _ => unimplemented!(),
                     }
                 }
@@ -879,7 +940,6 @@ impl hal::Device<Backend> for Device {
     }
 
     fn destroy_compute_pipeline(&self, _pipeline: n::ComputePipeline) {
-        unimplemented!()
     }
 
     fn destroy_framebuffer(&self, _buffer: n::FrameBuffer) {

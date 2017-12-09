@@ -105,6 +105,7 @@ struct CommandBufferInner {
     viewport: Option<MTLViewport>,
     scissors: Option<MTLScissorRect>,
     pipeline_state: Option<metal::RenderPipelineState>,
+    compute_pipeline_state: Option<metal::ComputePipelineState>,
     primitive_type: MTLPrimitiveType,
     resources_vs: StageResources,
     resources_fs: StageResources,
@@ -178,6 +179,7 @@ enum EncoderState {
     None,
     Blit(metal::BlitCommandEncoder),
     Render(metal::RenderCommandEncoder),
+    Compute(metal::ComputeCommandEncoder),
 }
 
 impl CommandQueue {
@@ -251,6 +253,7 @@ impl pool::RawCommandPool<Backend> for CommandPool {
                     viewport: None,
                     scissors: None,
                     pipeline_state: None,
+                    compute_pipeline_state: None,
                     primitive_type: MTLPrimitiveType::Point,
                     resources_vs: StageResources::new(),
                     resources_fs: StageResources::new(),
@@ -308,6 +311,7 @@ impl CommandBuffer {
             EncoderState::None => {},
             EncoderState::Blit(ref blit_encoder) => return blit_encoder,
             EncoderState::Render(_) => panic!("invalid inside renderpass"),
+            EncoderState::Compute(_) => panic!("invalid inside compute"),
         }
 
         let blit_encoder = inner.command_buffer.new_blit_command_encoder().to_owned();
@@ -345,6 +349,9 @@ impl RawCommandBuffer<Backend> for CommandBuffer {
             EncoderState::Render(ref render_encoder) => {
                 render_encoder.end_encoding();
             },
+            EncoderState::Compute(ref compute_encoder) => {
+                compute_encoder.end_encoding();
+            }
         }
         self.inner().encoder_state = EncoderState::None;
     }
@@ -508,6 +515,9 @@ impl RawCommandBuffer<Backend> for CommandBuffer {
                 EncoderState::Blit(ref blit) => {
                     blit.end_encoding();
                 },
+                EncoderState::Compute(ref compute) => {
+                    compute.end_encoding();
+                },
                 EncoderState::None => {},
             }
             command_buffer.encoder_state = EncoderState::None;
@@ -621,6 +631,17 @@ impl RawCommandBuffer<Backend> for CommandBuffer {
                                         }
                                     }
                                 }
+                                StorageBuffer(ref buffers) => {
+                                    for (i, ref bref) in buffers.iter().enumerate() {
+                                        if let Some(ref buffer) = **bref {
+                                            let offset = buffer.1;
+                                            inner.resources_vs.add_buffer(start + i, buffer.0.as_ref(), offset as _);
+                                            if let EncoderState::Render(ref encoder) = inner.encoder_state {
+                                                encoder.set_vertex_buffer((start + i) as _,offset as _, Some(buffer.0.as_ref()));
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         if desc_layout.stage_flags.contains(pso::ShaderStageFlags::FRAGMENT) {
@@ -657,6 +678,17 @@ impl RawCommandBuffer<Backend> for CommandBuffer {
                                         }
                                     }
                                 }
+                                StorageBuffer(ref buffers) => {
+                                    for (i, ref bref) in buffers.iter().enumerate() {
+                                        if let Some(ref buffer) = **bref {
+                                            let offset = buffer.1;
+                                            inner.resources_fs.add_buffer(start + i, buffer.0.as_ref(), offset as _);
+                                            if let EncoderState::Render(ref encoder) = inner.encoder_state {
+                                                encoder.set_fragment_buffer((start + i) as _,offset as _, Some(buffer.0.as_ref()));
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -681,8 +713,13 @@ impl RawCommandBuffer<Backend> for CommandBuffer {
         }
     }
 
-    fn bind_compute_pipeline(&mut self, _pipeline: &native::ComputePipeline) {
-        unimplemented!()
+    fn bind_compute_pipeline(&mut self, pipeline: &native::ComputePipeline) {
+        let inner = self.inner();
+        let pipeline_state = pipeline.raw.to_owned();
+        if let EncoderState::Compute(ref encoder) = inner.encoder_state {
+            encoder.set_compute_pipeline_state(&pipeline_state);
+        }
+        inner.compute_pipeline_state = Some(pipeline_state);
     }
 
     fn bind_compute_descriptor_sets(
@@ -691,11 +728,11 @@ impl RawCommandBuffer<Backend> for CommandBuffer {
         _first_set: usize,
         _sets: &[&native::DescriptorSet],
     ) {
-        unimplemented!()
+        //unimplemented!()
     }
 
     fn dispatch(&mut self, _x: u32, _y: u32, _z: u32) {
-        unimplemented!()
+        //unimplemented!()
     }
 
     fn dispatch_indirect(&mut self, _buffer: &native::Buffer, _offset: u64) {
@@ -708,7 +745,7 @@ impl RawCommandBuffer<Backend> for CommandBuffer {
         _dst: &native::Buffer,
         _regions: &[BufferCopy],
     ) {
-        unimplemented!()
+        //unimplemented!()
     }
 
     fn copy_image(

@@ -63,7 +63,15 @@ unsafe impl Send for GraphicsPipeline {}
 unsafe impl Sync for GraphicsPipeline {}
 
 #[derive(Debug)]
-pub struct ComputePipeline {}
+pub struct ComputePipeline {
+    // we hold the compiled libraries here for now
+    // TODO: move to some cache in `Device`
+    pub(crate) cs_lib: metal::Library,
+    pub(crate) raw: metal::ComputePipelineState,
+}
+
+unsafe impl Send for ComputePipeline {}
+unsafe impl Sync for ComputePipeline {}
 
 #[derive(Debug)]
 pub struct Image(pub(crate) metal::Texture);
@@ -123,6 +131,7 @@ impl hal::DescriptorPool<Backend> for DescriptorPool {
                     };
 
                     let bindings = layout_bindings.iter().map(|layout| {
+                        println!("{:?}", layout.ty);
                         let binding = match layout.ty {
                             pso::DescriptorType::Sampler => {
                                 let resources = (0 .. layout.count).map(|_| None);
@@ -136,6 +145,10 @@ impl hal::DescriptorPool<Backend> for DescriptorPool {
                             pso::DescriptorType::UniformBuffer => {
                                 let resources = (0 .. layout.count).map(|_| None);
                                 DescriptorSetBinding::ConstantBuffer(resources.collect())
+                            }
+                            pso::DescriptorType::StorageBuffer => {
+                                let resources = (0 .. layout.count).map(|_| None);
+                                DescriptorSetBinding::StorageBuffer(resources.collect())
                             }
                             _ => unimplemented!()
                         };
@@ -212,7 +225,7 @@ pub enum DescriptorSetBinding {
     //UniformTexelBuffer,
     //StorageTexelBuffer,
     ConstantBuffer(Vec<Option<(metal::Buffer, u64)>>),
-    //StorageBuffer,
+    StorageBuffer(Vec<Option<(metal::Buffer, u64)>>),
     //InputAttachment(Vec<(metal::Texture, image::ImageLayout)>),
 }
 
