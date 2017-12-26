@@ -1,13 +1,13 @@
-use std::mem;
+use std::{mem, slice};
 use std::rc::Rc;
 
 use hal;
 use gl;
 use smallvec::SmallVec;
+use conv;
 
 use {command as com, native, state};
 use {Backend, Share};
-
 
 pub type ArrayBuffer = gl::types::GLuint;
 
@@ -82,7 +82,7 @@ impl CommandQueue {
         // is execute because we have no control of the called functions.
         self.state.flush();
     }
-
+    
     /*
     fn bind_attribute(&mut self, slot: hal::AttributeSlot, buffer: n::Buffer, bel: BufferElement) {
         use core::format::SurfaceType as S;
@@ -173,10 +173,15 @@ impl CommandQueue {
 
     /// Return a reference to a stored data object.
     fn get<T>(data: &[u8], ptr: com::BufferSlice) -> &[T] {
-        assert_eq!(ptr.size % mem::size_of::<T>() as u32, 0);
-        let raw_data = Self::get_raw(data, ptr);
-        unsafe { mem::transmute(raw_data) }
+        let raw = Self::get_raw(data, ptr);
+        unsafe {
+            slice::from_raw_parts(
+                raw.as_ptr() as *const _,
+                raw.len() * mem::size_of::<u8>() / mem::size_of::<T>(),
+            )
+        }
     }
+
     /// Return a reference to a stored data object.
     fn get_raw(data: &[u8], ptr: com::BufferSlice) -> &[u8] {
         assert!(data.len() >= (ptr.offset + ptr.size) as usize);
@@ -249,14 +254,25 @@ impl CommandQueue {
                 self.state.index_buffer = Some(buffer);
                 unsafe { gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, buffer) };
             }
-//          com::Command::BindVertexBuffers(_data_ptr) =>
-            com::Command::Draw { primitive, ref vertices, ref instances } => {
+            com::Command::BindVertexBuffer(buffer) => unsafe {
+                &self.share.context.BindBuffer(gl::ARRAY_BUFFER, buffer);
+            }
+            com::Command::Draw { ref primitive, ref vertices, ref instances } => {
                 let gl = &self.share.context;
                 let features = &self.share.features;
+
+                if let &hal::Primitive::PatchList(size) = primitive {     
+                    unsafe {
+                        gl.PatchParameteri(gl::PATCH_VERTICES, size as gl::types::GLint);
+                    }
+                }
+
+                let gl_primitive = conv::primitive_to_gl_primitive(*primitive);
+
                 if instances == &(0u32..1) {
                     unsafe {
                         gl.DrawArrays(
-                            primitive,
+                            gl_primitive,
                             vertices.start as _,
                             (vertices.end - vertices.start) as _,
                         );
@@ -265,7 +281,7 @@ impl CommandQueue {
                     if instances.start == 0 {
                         unsafe {
                             gl.DrawArraysInstanced(
-                                primitive,
+                                gl_primitive,
                                 vertices.start as _,
                                 (vertices.end - vertices.start) as _,
                                 instances.end as _,
@@ -274,7 +290,7 @@ impl CommandQueue {
                     } else if features.draw_instanced_base {
                         unsafe {
                             gl.DrawArraysInstancedBaseInstance(
-                                primitive,
+                                gl_primitive,
                                 vertices.start as _,
                                 (vertices.end - vertices.start) as _,
                                 (instances.end - instances.start) as _,
@@ -288,16 +304,24 @@ impl CommandQueue {
                     error!("Instanced draw calls are not supported");
                 }
             }
-            com::Command::DrawIndexed { primitive, index_type, index_count, index_buffer_offset, base_vertex, ref instances } => {
+            com::Command::DrawIndexed { ref primitive, index_type, index_count, index_buffer_offset, base_vertex, ref instances } => {
                 let gl = &self.share.context;
                 let features = &self.share.features;
                 let offset = index_buffer_offset as *const gl::types::GLvoid;
+
+                if let &hal::Primitive::PatchList(size) = primitive {     
+                    unsafe {
+                        gl.PatchParameteri(gl::PATCH_VERTICES, size as gl::types::GLint);
+                    }
+                }
+
+                let gl_primitive = conv::primitive_to_gl_primitive(*primitive);
 
                 if instances == &(0u32..1) {
                     if base_vertex == 0 {
                         unsafe {
                             gl.DrawElements(
-                                primitive,
+                                gl_primitive,
                                 index_count as _,
                                 index_type,
                                 offset,
@@ -306,7 +330,7 @@ impl CommandQueue {
                     } else if features.draw_indexed_base {
                         unsafe {
                             gl.DrawElementsBaseVertex(
-                                primitive,
+                                gl_primitive,
                                 index_count as _,
                                 index_type,
                                 offset,
@@ -320,7 +344,7 @@ impl CommandQueue {
                     if base_vertex == 0 && instances.start == 0 {
                         unsafe {
                             gl.DrawElementsInstanced(
-                                primitive,
+                                gl_primitive,
                                 index_count as _,
                                 index_type,
                                 offset,
@@ -330,7 +354,7 @@ impl CommandQueue {
                     } else if instances.start == 0 && features.draw_indexed_instanced_base_vertex {
                         unsafe {
                             gl.DrawElementsInstancedBaseVertex(
-                                primitive,
+                                gl_primitive,
                                 index_count as _,
                                 index_type,
                                 offset,
@@ -343,7 +367,7 @@ impl CommandQueue {
                     } else if features.draw_indexed_instanced_base {
                         unsafe {
                             gl.DrawElementsInstancedBaseVertexBaseInstance(
-                                primitive,
+                                gl_primitive,
                                 index_count as _,
                                 index_type,
                                 offset,
@@ -416,23 +440,21 @@ impl CommandQueue {
             com::Command::SetBlendColor(color) => {
                 state::set_blend_color(&self.share.context, color);
             }
-            com::Command::ClearColor(_texture, c) => {
+            com::Command::ClearColor(c) => unsafe {
                 //TODO: check texture?
                 let gl = &self.share.context;
                 state::unlock_color_mask(gl);
                 if self.share.private_caps.clear_buffer {
                     // Render target view bound to the framebuffer at attachment slot 0.
-                    unsafe {
-                        match c {
-                            hal::command::ClearColor::Float(v) => {
-                                gl.ClearBufferfv(gl::COLOR, 0, &v[0]);
-                            }
-                            hal::command::ClearColor::Int(v) => {
-                                gl.ClearBufferiv(gl::COLOR, 0, &v[0]);
-                            }
-                            hal::command::ClearColor::Uint(v) => {
-                                gl.ClearBufferuiv(gl::COLOR, 0, &v[0]);
-                            }
+                    match c {
+                        hal::command::ClearColor::Float(v) => {
+                            gl.ClearBufferfv(gl::COLOR, 0, &v[0]);
+                        }
+                        hal::command::ClearColor::Int(v) => {
+                            gl.ClearBufferiv(gl::COLOR, 0, &v[0]);
+                        }
+                        hal::command::ClearColor::Uint(v) => {
+                            gl.ClearBufferuiv(gl::COLOR, 0, &v[0]);
                         }
                     }
                 } else {
@@ -443,10 +465,8 @@ impl CommandQueue {
                         [0.0, 0.0, 0.0, 0.0]
                     };
 
-                    unsafe {
-                        gl.ClearColor(v[0], v[1], v[2], v[3]);
-                        gl.Clear(gl::COLOR_BUFFER_BIT);
-                    }
+                    gl.ClearColor(v[0], v[1], v[2], v[3]);
+                    gl.Clear(gl::COLOR_BUFFER_BIT);
                 }
             }
             com::Command::BindFrameBuffer(point, frame_buffer) => {
@@ -463,10 +483,39 @@ impl CommandQueue {
             com::Command::SetDrawColorBuffers(num) => {
                 state::bind_draw_color_buffers(&self.share.context, num);
             }
-            /*
             com::Command::BindProgram(program) => unsafe {
                 self.share.context.UseProgram(program);
-            },
+            }
+            com::Command::BindAttribute(attribute) => unsafe {
+                let gl = &self.share.context;
+                gl.BindBuffer(gl::ARRAY_BUFFER, attribute.buffer);
+                gl.VertexAttribPointer(attribute.location,
+                    2, gl::FLOAT, gl::FALSE, 16, attribute.offset as *const gl::types::GLvoid);
+                gl.EnableVertexAttribArray(attribute.location);
+                gl.BindBuffer(gl::ARRAY_BUFFER, 0);
+            }
+            com::Command::UnbindAttribute(attribute) => unsafe {
+                self.share.context.DisableVertexAttribArray(attribute.location);
+            }
+            com::Command::CopyBufferToImage(buffer, image, ref region) => unsafe {
+                let gl = &self.share.context;
+                gl.ActiveTexture(gl::TEXTURE0);
+                gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, buffer);
+                gl.BindTexture(gl::TEXTURE_2D, image);
+                let &hal::command::BufferImageCopy {
+                    ref image_layers,
+                    ref image_offset,
+                    ref image_extent,
+                    ..
+                } = region;
+                gl.TexSubImage2D(gl::TEXTURE_2D, image_layers.level as _, image_offset.x, image_offset.y,
+                    image_extent.width as _, image_extent.height as _, gl::RGBA, gl::UNSIGNED_BYTE, 0 as *const _);
+                gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, 0);
+            }
+            com::Command::BindBlendSlot(slot, blend) => {
+                state::bind_blend_slot(&self.share.context, slot, &blend);
+            }
+            /*
             com::Command::BindConstantBuffer(pso::ConstantBufferParam(buffer, _, slot)) => unsafe {
                 self.share.context.BindBufferBase(gl::UNIFORM_BUFFER, slot as gl::types::GLuint, buffer);
             },
@@ -506,12 +555,6 @@ impl CommandQueue {
                     self.bind_target(point, gl::STENCIL_ATTACHMENT, stencil);
                 }
             },
-            com::Command::BindAttribute(slot, buffer,  bel) => {
-                self.bind_attribute(slot, buffer, bel);
-            },
-            com::Command::UnbindAttribute(slot) => unsafe {
-                self.share.context.DisableVertexAttribArray(slot as gl::types::GLuint);
-            },
             com::Command::BindUniform(loc, uniform) => {
                 let gl = &self.share.context;
                 shade::bind_uniform(gl, loc as gl::types::GLint, uniform);
@@ -533,12 +576,6 @@ impl CommandQueue {
                     state::bind_blend(&self.share.context, color);
                 }else if false {
                     error!("Separate blending slots are not supported");
-                }
-            },
-            com::Command::SetPatches(num) => {
-                let gl = &self.share.context;
-                unsafe {
-                    gl.PatchParameteri(gl::PATCH_VERTICES, num as gl::types::GLint);
                 }
             },
             com::Command::CopyBuffer(src, dst, src_offset, dst_offset, size) => {

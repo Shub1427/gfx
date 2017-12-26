@@ -1,13 +1,13 @@
 #![allow(missing_docs)]
 
 use gl;
-use hal::{self, command, image, memory, pso, query};
+use hal::{self, command, image, memory, pso, query, ColorSlot};
 use hal::buffer::IndexBufferView;
 use {native as n, Backend};
 use pool::{self, BufferMemory};
 
 use std::borrow::Borrow;
-use std::mem;
+use std::{mem, slice};
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
@@ -55,12 +55,12 @@ pub enum Command {
     Dispatch(u32, u32, u32),
     DispatchIndirect(gl::types::GLuint, u64),
     Draw {
-        primitive: gl::types::GLenum,
+        primitive: hal::Primitive,
         vertices: Range<hal::VertexCount>,
         instances: Range<hal::InstanceCount>,
     },
     DrawIndexed {
-        primitive: gl::types::GLenum,
+        primitive: hal::Primitive,
         index_type: gl::types::GLenum,
         index_count: hal::IndexCount,
         index_buffer_offset: u64,
@@ -68,17 +68,22 @@ pub enum Command {
         instances: Range<hal::InstanceCount>,
     },
     BindIndexBuffer(gl::types::GLuint),
-    //BindVertexBuffers(BufferSlice),
+    BindVertexBuffer(gl::types::GLuint),
     SetViewports {
         viewport_ptr: BufferSlice,
         depth_range_ptr: BufferSlice,
     },
     SetScissors(BufferSlice),
     SetBlendColor(command::ColorValue),
-    ClearColor(n::ImageView, command::ClearColor),
+    ClearColor(command::ClearColor),
     BindFrameBuffer(FrameBufferTarget, n::FrameBuffer),
     BindTargetView(FrameBufferTarget, AttachmentPoint, n::ImageView),
     SetDrawColorBuffers(usize),
+    BindProgram(gl::types::GLuint),
+    BindAttribute(n::AttributeDesc),
+    UnbindAttribute(n::AttributeDesc),
+    CopyBufferToImage(n::RawBuffer, gl::types::GLuint, command::BufferImageCopy),
+    BindBlendSlot(ColorSlot, pso::ColorBlendDesc)
 }
 
 pub type FrameBufferTarget = gl::types::GLenum;
@@ -88,7 +93,7 @@ pub type AttachmentPoint = gl::types::GLenum;
 #[derive(Clone)]
 struct Cache {
     // Active primitive topology, set by the current pipeline.
-    primitive: Option<gl::types::GLenum>,
+    primitive: Option<hal::Primitive>,
     // Active index type, set by the current index buffer.
     index_type: Option<hal::IndexType>,
     // Stencil reference values (front, back).
@@ -226,8 +231,15 @@ impl RawCommandBuffer {
 
     /// Copy a given vector slice into the data buffer.
     fn add<T>(&mut self, data: &[T]) -> BufferSlice {
-        self.add_raw(unsafe { mem::transmute(data) })
+        let bytes = unsafe {
+            slice::from_raw_parts(
+                data.as_ptr() as *const _,
+                data.len() * mem::size_of::<T>() / mem::size_of::<u8>(),
+            )
+        };
+        self.add_raw(bytes)
     }
+
     /// Copy a given u8 slice into the data buffer.
     fn add_raw(&mut self, data: &[u8]) -> BufferSlice {
         let mut memory = self
@@ -255,6 +267,8 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         // Implicit buffer reset when individual reset is set.
         if self.individual_reset {
             self.reset(false);
+        } else {
+            self.soft_reset();
         }
     }
 
@@ -298,7 +312,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         T: IntoIterator,
         T::Item: Borrow<memory::Barrier<'a, Backend>>,
     {
-        unimplemented!()
+        // TODO
     }
 
     fn fill_buffer(&mut self, _buffer: &n::Buffer, _range: Range<u64>, _data: u32) {
@@ -314,13 +328,23 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         _render_pass: &n::RenderPass,
         _frame_buffer: &n::FrameBuffer,
         _render_area: command::Rect,
-        _clear_values: T,
+        clear_values: T,
         _first_subpass: command::SubpassContents,
     ) where
         T: IntoIterator,
         T::Item: Borrow<command::ClearValue>,
     {
-        unimplemented!()
+        // TODO
+        for clear_value in clear_values.into_iter().map(|cv| *cv.borrow()) {
+            match clear_value {
+                command::ClearValue::Color(value) => {
+                    self.push_cmd(Command::ClearColor(value));
+                }
+                command::ClearValue::DepthStencil(ref _depth_stencil) => {
+                    unimplemented!();
+                }
+            }
+        }
     }
 
     fn next_subpass(&mut self, _contents: command::SubpassContents) {
@@ -328,7 +352,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
     }
 
     fn end_renderpass(&mut self) {
-        unimplemented!()
+        // TODO
     }
 
     fn clear_color_image(
@@ -346,7 +370,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         self.push_cmd(Command::BindFrameBuffer(gl::DRAW_FRAMEBUFFER, fbo));
         self.push_cmd(Command::BindTargetView(gl::DRAW_FRAMEBUFFER, gl::COLOR_ATTACHMENT0, view));
         self.push_cmd(Command::SetDrawColorBuffers(1));
-        self.push_cmd(Command::ClearColor(view, value));
+        self.push_cmd(Command::ClearColor(value));
     }
 
     fn clear_depth_stencil_image(
@@ -393,8 +417,10 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         self.push_cmd(Command::BindIndexBuffer(ibv.buffer.raw));
     }
 
-    fn bind_vertex_buffers(&mut self, _vbs: hal::pso::VertexBufferSet<Backend>) {
-        unimplemented!()
+    fn bind_vertex_buffers(&mut self, vbs: hal::pso::VertexBufferSet<Backend>) {
+        for vertex_buffer in vbs.0 {
+            self.push_cmd(Command::BindVertexBuffer(vertex_buffer.0.raw));
+        }
     }
 
     fn set_viewports<T>(&mut self, viewports: T)
@@ -478,8 +504,27 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         }
     }
 
-    fn bind_graphics_pipeline(&mut self, _pipeline: &n::GraphicsPipeline) {
-        unimplemented!()
+    fn bind_graphics_pipeline(&mut self, pipeline: &n::GraphicsPipeline) {
+        let &n::GraphicsPipeline {
+            ref program,
+            ref primitive,
+            ref attributes,
+            ref blend_targets
+        } = pipeline;
+
+        if self.cache.primitive != Some(*primitive) {
+            self.cache.primitive = Some(*primitive);
+        }
+
+        self.push_cmd(Command::BindProgram(*program));
+
+        for attribute in attributes {
+            self.push_cmd(Command::BindAttribute(*attribute));
+        }
+
+        for (slot, blend_target) in blend_targets.iter().enumerate() {
+            self.push_cmd(Command::BindBlendSlot(slot as _, *blend_target));
+        }
     }
 
     fn bind_graphics_descriptor_sets<'a, T>(
@@ -491,7 +536,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         T: IntoIterator,
         T::Item: Borrow<n::DescriptorSet>,
     {
-        unimplemented!()
+        // TODO
     }
 
     fn bind_compute_pipeline(&mut self, _pipeline: &n::ComputePipeline) {
@@ -542,15 +587,27 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
 
     fn copy_buffer_to_image<T>(
         &mut self,
-        _src: &n::Buffer,
-        _dst: &n::Image,
-        _dst_layout: image::ImageLayout,
-        _regions: T,
+        src: &n::Buffer,
+        dst: &n::Image,
+        _: image::ImageLayout,
+        regions: T,
     ) where
         T: IntoIterator,
         T::Item: Borrow<command::BufferImageCopy>,
     {
-        unimplemented!()
+        let image_raw = match dst {
+            &n::Image::Surface(s) => s,
+            &n::Image::Texture(t) => t
+        };
+
+        let regs = regions.into_iter().collect::<Vec<_>>();
+
+        assert!(regs.len() >= 1);
+
+        self.push_cmd(Command::CopyBufferToImage(src.raw, image_raw, regs[0].borrow().clone() as _));
+        /*for region in regions {
+            self.push_cmd(Command::CopyBufferToImage(src.raw, image_raw));
+        }*/
     }
 
     fn copy_image_to_buffer<T>(
