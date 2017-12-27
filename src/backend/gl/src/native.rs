@@ -1,4 +1,4 @@
-use hal::{self, image as i, pass};
+use hal::{self, image as i, pass, pso};
 use hal::memory::Properties;
 use gl;
 use Backend;
@@ -35,11 +35,13 @@ impl Fence {
     }
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug)]
 pub struct GraphicsPipeline {
     pub(crate) program: Program,
     pub(crate) primitive: gl::types::GLenum,
     pub(crate) patch_size: Option<gl::types::GLint>,
+    pub(crate) attributes: Vec<AttributeDesc>,
+    pub(crate) blend_targets: Vec<pso::ColorBlendDesc>,
 }
 
 #[derive(Clone, Debug, Copy)]
@@ -124,3 +126,10 @@ pub struct PipelineLayout;
 #[derive(Debug)]
 // No inter-queue synchronization required for GL.
 pub struct Semaphore;
+
+#[derive(Debug, Clone, Copy)]
+pub struct AttributeDesc {
+    pub(crate) location: gl::types::GLuint,
+    pub(crate) offset: u32,
+    pub(crate) buffer: gl::types::GLuint,
+}
