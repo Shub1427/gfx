@@ -173,6 +173,7 @@ impl CommandQueue {
 
     /// Return a reference to a stored data object.
     fn get<T>(data: &[u8], ptr: com::BufferSlice) -> &[T] {
+        println!("{:?}", ptr.size);
         assert_eq!(ptr.size % mem::size_of::<T>() as u32, 0);
         let raw_data = Self::get_raw(data, ptr);
         unsafe { mem::transmute(raw_data) }
