@@ -68,7 +68,7 @@ pub enum Command {
         instances: Range<hal::InstanceCount>,
     },
     BindIndexBuffer(gl::types::GLuint),
-    //BindVertexBuffers(BufferSlice),
+    BindVertexBuffer(gl::types::GLuint),
     SetViewports {
         viewport_ptr: BufferSlice,
         depth_range_ptr: BufferSlice,
@@ -463,8 +463,10 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         self.push_cmd(Command::BindIndexBuffer(ibv.buffer.raw));
     }
 
-    fn bind_vertex_buffers(&mut self, _vbs: hal::pso::VertexBufferSet<Backend>) {
-        unimplemented!()
+    fn bind_vertex_buffers(&mut self, vbs: hal::pso::VertexBufferSet<Backend>) {
+        for vertex_buffer in vbs.0 {
+            self.push_cmd(Command::BindVertexBuffer(vertex_buffer.0.raw));
+        }
     }
 
     fn set_viewports<T>(&mut self, viewports: T)

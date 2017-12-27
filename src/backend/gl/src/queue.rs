@@ -256,7 +256,9 @@ impl CommandQueue {
                 self.state.index_buffer = Some(buffer);
                 unsafe { gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, buffer) };
             }
-//          com::Command::BindVertexBuffers(_data_ptr) =>
+            com::Command::BindVertexBuffer(buffer) => unsafe {
+                self.share.context.BindBuffer(gl::ARRAY_BUFFER, buffer);
+            }
             com::Command::Draw { primitive, ref vertices, ref instances } => {
                 let gl = &self.share.context;
                 let features = &self.share.features;
