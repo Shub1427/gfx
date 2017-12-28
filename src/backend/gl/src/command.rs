@@ -662,7 +662,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         assert!(regs.len() >= 1);
 
         for reg in regs {
-            self.push_cmd(Command::CopyBufferToTexture(src.raw, image_raw, *reg.borrow()));
+            self.push_cmd(Command::CopyBufferToTexture(src.raw, image_raw, reg.borrow().clone()));
         }
     }
 
