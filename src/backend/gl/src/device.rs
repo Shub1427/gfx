@@ -601,26 +601,21 @@ impl d::Device<B> for Device {
         let gl = &self.share.context;
 
         let raw = unsafe {
-            let mut raw = mem::uninitialized();
+            let mut raw = 0;
             gl.GenTextures(1, &mut raw);
             raw
         };
 
-        let width;
-        let height;
-
-        match kind {
-            i::Kind::D2(w, h, _aa) => unsafe {
-                width = w;
-                height = h;
+        let (width, height) = match kind {
+            i::Kind::D2(width, height, _aa) => unsafe {
                 gl.BindTexture(gl::TEXTURE_2D, raw);
-                gl.TexStorage2D(gl::TEXTURE_2D, 1, gl::SRGB8_ALPHA8, w as _, h as _);
-                gl.BindTexture(gl::TEXTURE_2D, 0);
+                gl.TexStorage2D(gl::TEXTURE_2D, 1, gl::SRGB8_ALPHA8, width as _, height as _);
+                (width, height)
             }
             _ => {
                 unimplemented!();
             }
-        }
+        };
 
         Ok(UnboundImage {
             raw,
@@ -637,6 +632,7 @@ impl d::Device<B> for Device {
     }
 
     fn bind_image_memory(&self, _memory: &n::Memory, _offset: u64, image: UnboundImage) -> Result<n::Image, d::BindError> {
+        // TODO
         Ok(n::Image::Texture(image.raw))
     }
 
@@ -681,6 +677,7 @@ impl d::Device<B> for Device {
     }
 
     fn update_descriptor_sets(&self, _: &[pso::DescriptorSetWrite<B>]) {
+        // TODO
     }
 
     fn acquire_mapping_raw(&self, buffer: &n::Buffer, read: Option<Range<u64>>)

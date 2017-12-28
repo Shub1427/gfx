@@ -68,7 +68,6 @@ pub enum Command {
         instances: Range<hal::InstanceCount>,
     },
     BindIndexBuffer(gl::types::GLuint),
-    BindVertexBuffer(gl::types::GLuint),
     SetViewports {
         viewport_ptr: BufferSlice,
         depth_range_ptr: BufferSlice,
@@ -364,6 +363,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         T: IntoIterator,
         T::Item: Borrow<memory::Barrier<'a, Backend>>,
     {
+        // TODO
     }
 
     fn fill_buffer(&mut self, _buffer: &n::Buffer, _range: Range<u64>, _data: u32) {
@@ -402,6 +402,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
     }
 
     fn end_renderpass(&mut self) {
+        // TODO
     }
 
     fn clear_color_image(
@@ -466,10 +467,8 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         self.push_cmd(Command::BindIndexBuffer(ibv.buffer.raw));
     }
 
-    fn bind_vertex_buffers(&mut self, vbs: hal::pso::VertexBufferSet<Backend>) {
-        for vertex_buffer in vbs.0 {
-            self.push_cmd(Command::BindVertexBuffer(vertex_buffer.0.raw));
-        }
+    fn bind_vertex_buffers(&mut self, _vbs: hal::pso::VertexBufferSet<Backend>) {
+        // TODO
     }
 
     fn set_viewports<T>(&mut self, viewports: T)
@@ -594,6 +593,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         T: IntoIterator,
         T::Item: Borrow<n::DescriptorSet>,
     {
+        // TODO
     }
 
     fn bind_compute_pipeline(&mut self, _pipeline: &n::ComputePipeline) {
