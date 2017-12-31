@@ -486,6 +486,7 @@ impl CommandQueue {
                 self.share.context.DisableVertexAttribArray(attribute.location);
             }
             com::Command::CopyBufferToTexture(buffer, image, ref region) => unsafe {
+                // TODO: Fix format and active texture
                 let gl = &self.share.context;
                 gl.ActiveTexture(gl::TEXTURE0);
                 gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, buffer);
