@@ -22,6 +22,7 @@ use cocoa::foundation::{NSRange, NSUInteger};
 use metal::{self,
     MTLFeatureSet, MTLLanguageVersion, MTLArgumentAccess, MTLDataType, MTLPrimitiveType, MTLPrimitiveTopologyClass,
     MTLVertexStepFunction, MTLSamplerBorderColor, MTLSamplerMipFilter, MTLStorageMode, MTLResourceOptions, MTLTextureType,
+    CaptureManager
 };
 use foreign_types::ForeignType;
 use objc::runtime::Object as ObjcObject;
@@ -984,6 +985,7 @@ impl hal::Device<Backend> for Device {
 
         encoder.end_encoding();
         cmd_buffer.commit();
+        cmd_buffer.wait_until_completed();
     }
 
     fn create_semaphore(&self) -> n::Semaphore {
@@ -1193,6 +1195,8 @@ impl hal::Device<Backend> for Device {
     }
 
     fn free_memory(&self, _memory: n::Memory) {
+        let capture_manager = CaptureManager::shared();
+        capture_manager.stop_capture();
     }
 
     fn create_buffer(
