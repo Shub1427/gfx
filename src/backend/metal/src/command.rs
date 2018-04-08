@@ -14,7 +14,7 @@ use hal::image::{Filter, Layout, SubresourceRange};
 use hal::query::{Query, QueryControl, QueryId};
 use hal::queue::{RawCommandQueue, RawSubmission};
 
-use metal::{self, MTLViewport, MTLScissorRect, MTLPrimitiveType, MTLClearColor, MTLIndexType, MTLSize, MTLOrigin};
+use metal::{self, MTLViewport, MTLScissorRect, MTLPrimitiveType, MTLClearColor, MTLIndexType, MTLSize, MTLOrigin, CaptureManager};
 use cocoa::foundation::NSUInteger;
 use block::{ConcreteBlock};
 use conversions::{map_index_type};
@@ -703,8 +703,11 @@ unsafe impl Sync for CommandBuffer {}
 
 impl CommandQueue {
     pub fn new(device: &metal::DeviceRef) -> CommandQueue {
+        let queue = device.new_command_queue();
+        let capture_manager = CaptureManager::shared();
+        capture_manager.start_capture_with_command_queue(&queue);
         CommandQueue(Arc::new(QueueInner {
-            queue: device.new_command_queue(),
+            queue,
         }))
     }
 
