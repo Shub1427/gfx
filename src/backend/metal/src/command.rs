@@ -1,4 +1,4 @@
-use {Backend};
+use {Backend, AutoreleasePool};
 use {native, window};
 
 use std::borrow::{Borrow, BorrowMut};
@@ -14,7 +14,7 @@ use hal::image::{Filter, Layout, SubresourceRange};
 use hal::query::{Query, QueryControl, QueryId};
 use hal::queue::{RawCommandQueue, RawSubmission};
 
-use metal::{self, MTLViewport, MTLScissorRect, MTLPrimitiveType, MTLClearColor, MTLIndexType, MTLSize, MTLOrigin};
+use metal::{self, MTLViewport, MTLScissorRect, MTLPrimitiveType, MTLClearColor, MTLIndexType, MTLSize, MTLOrigin, CaptureManager};
 use cocoa::foundation::NSUInteger;
 use block::{ConcreteBlock};
 use conversions::{map_index_type};
@@ -294,9 +294,13 @@ impl CommandBufferInner {
     fn reset(&mut self, queue: &QueueInner, release_resources: bool) {
         match self.sink {
             CommandSink::Immediate { ref mut cmd_buffer, ref mut encoder_state } => {
+                let mut autorelease_pool = unsafe { AutoreleasePool::new() };
                 //TODO: release the old one?
                 *cmd_buffer = queue.new_command_buffer_ref().to_owned();
                 *encoder_state = EncoderState::None;
+                unsafe {
+                    autorelease_pool.reset();
+                }
             }
             CommandSink::Deferred { ref mut passes, .. } => {
                 passes.clear();
@@ -707,6 +711,10 @@ unsafe impl Sync for CommandBuffer {}
 
 impl CommandQueue {
     pub fn new(device: &metal::DeviceRef) -> CommandQueue {
+        let queue = device.new_command_queue();
+        let capture_manager = CaptureManager::shared();
+        capture_manager.start_capture_with_command_queue(&queue);
+
         CommandQueue(Arc::new(QueueInner {
             queue: device.new_command_queue(),
         }))
