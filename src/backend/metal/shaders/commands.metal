@@ -33,3 +33,11 @@ fragment float4 ps_blit_array(
 ) {
   return tex2DArray.sample(sampler2D, in.uv.xy, uint(in.uv.z), level(in.uv.w));
 }
+
+kernel void cs_fill_buffer(
+    device uint *buffer [[ buffer(0) ]],
+    constant uint &value [[ buffer(1) ]],
+    uint index [[ thread_position_in_grid ]]
+) {
+    buffer[index] = value;
+}

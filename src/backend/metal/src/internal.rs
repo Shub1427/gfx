@@ -21,6 +21,7 @@ pub struct ServicePipes {
     sampler_nearest: metal::SamplerState,
     sampler_linear: metal::SamplerState,
     blits: HashMap<Format, metal::RenderPipelineState>,
+    fill_buffer: metal::ComputePipelineState,
 }
 
 impl ServicePipes {
@@ -38,11 +39,14 @@ impl ServicePipes {
         sampler_desc.set_mag_filter(metal::MTLSamplerMinMagFilter::Linear);
         let sampler_linear = device.new_sampler(&sampler_desc);
 
+        let fill_buffer = Self::create_fill_buffer(&library, device);
+
         ServicePipes {
             blits: HashMap::new(),
             sampler_nearest,
             sampler_linear,
             library,
+            fill_buffer,
         }
     }
 
@@ -98,5 +102,20 @@ impl ServicePipes {
         pipeline.set_vertex_descriptor(Some(&vertex_descriptor));
 
         device.new_render_pipeline_state(&pipeline).unwrap()
+    }
+
+    pub fn get_fill_buffer(&self) -> &metal::ComputePipelineStateRef {
+        &self.fill_buffer
+    }
+
+    fn create_fill_buffer(
+        library: &metal::LibraryRef, device: &metal::DeviceRef
+    ) -> metal::ComputePipelineState {
+        let pipeline = metal::ComputePipelineDescriptor::new();
+
+        let cs_fill_buffer = library.get_function("cs_fill_buffer", None).unwrap();
+        pipeline.set_compute_function(Some(&cs_fill_buffer));
+
+        device.new_compute_pipeline_state(&pipeline).unwrap()
     }
 }
