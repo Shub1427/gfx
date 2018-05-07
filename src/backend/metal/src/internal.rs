@@ -116,6 +116,11 @@ impl ServicePipes {
         let cs_fill_buffer = library.get_function("cs_fill_buffer", None).unwrap();
         pipeline.set_compute_function(Some(&cs_fill_buffer));
 
+        if let Some(buffers) = pipeline.buffers() {
+            buffers.object_at(0).unwrap().set_mutability(metal::MTLMutability::Mutable);
+            buffers.object_at(1).unwrap().set_mutability(metal::MTLMutability::Immutable);
+        }
+
         device.new_compute_pipeline_state(&pipeline).unwrap()
     }
 }
