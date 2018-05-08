@@ -1047,7 +1047,7 @@ impl com::RawCommandBuffer<Backend> for CommandBuffer {
         range: R,
         data: u32,
     ) where
-        R: RangeArg<u64>,
+        R: RangeArg<buffer::Offset>,
     {
         let inner = unsafe { &mut *self.inner.get() };
         let sink = inner.sink.as_mut().unwrap();
@@ -1069,7 +1069,7 @@ impl com::RawCommandBuffer<Backend> for CommandBuffer {
 
         inner.retained_buffers.push(fill.clone());
 
-        let start = *range.start().unwrap();
+        let start = *range.start().unwrap_or(&0);
         assert_eq!(start & 3, 0);
 
         let end = match range.end() {

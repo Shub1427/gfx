@@ -45,4 +45,26 @@
 			expect: Buffer("buffer.output", [1, 0, 0, 0]),
 		),
 	},
+	"clear": {
+		"fill-whole": (
+			features: (bits: 0),
+			jobs: ["fill-whole"],
+			expect: Buffer("buffer.1", [0, 0, 255, 0, 0, 0, 255, 0]),
+		),
+		"fill-first": (
+			features: (bits: 0),
+			jobs: ["fill-first"],
+			expect: Buffer("buffer.2", [0, 255, 0, 0, 0, 0, 0, 0]),
+		),
+		"fill-last": (
+			features: (bits: 0),
+			jobs: ["fill-last"],
+			expect: Buffer("buffer.3", [0, 0, 0, 0, 255, 0, 0, 0]),
+		),
+		/*"fill-whole-nearest-multiple": (
+			features: (bits: 0),
+			jobs: ["fill-whole-nearest-multiple"],
+			expect: Buffer("buffer.4", [0, 0, 0, 0, 0, 0, 0, 0]),
+		),*/
+	}
 }

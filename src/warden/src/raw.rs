@@ -146,6 +146,16 @@ pub enum TransferCommand {
     },
 }
 
+#[derive(Debug, Deserialize)]
+pub enum ClearCommand {
+    FillBuffer {
+        buffer: String,
+        start: Option<hal::buffer::Offset>,
+        end: Option<hal::buffer::Offset>,
+        data: u32,
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub enum DescriptorRange {
     Buffers(Vec<String>),
@@ -192,6 +202,7 @@ pub struct DrawPass {
 #[derive(Debug, Deserialize)]
 pub enum Job {
     Transfer(TransferCommand),
+    Clear(ClearCommand),
     Graphics {
         framebuffer: String,
         clear_values: Vec<hal::command::ClearValue>,

@@ -858,6 +858,14 @@ impl<B: hal::Backend> Scene<B, hal::General> {
                         );
                     }
                 }
+                raw::Job::Clear(ref command) => match *command {
+                    raw::ClearCommand::FillBuffer { ref buffer, start, end, data } => {
+                        let buf = resources.buffers
+                            .get(buffer)
+                            .expect(&format!("Missing buffer: {}", buffer));
+                        command_buf.fill_buffer(&buf.handle, (start, end), data);
+                    }
+                }
                 raw::Job::Graphics { ref framebuffer, ref pass, ref clear_values } => {
                     let (ref fb, extent) = resources.framebuffers[framebuffer];
                     let rp = &resources.render_passes[&pass.0];

@@ -1,0 +1,54 @@
+(
+	resources: {
+		"buffer.1": Buffer(
+			size: 8,
+			usage: (bits: 0x3), //TRANSFER_SRC | TRANSFER_DST
+		),
+		"buffer.2": Buffer(
+			size: 8,
+			usage: (bits: 0x3), //TRANSFER_SRC | TRANSFER_DST
+		),
+		"buffer.3": Buffer(
+			size: 8,
+			usage: (bits: 0x3), //TRANSFER_SRC | TRANSFER_DST
+		),
+		/*"buffer.4": Buffer(
+			size: 9,
+			usage: (bits: 0x3), //TRANSFER_SRC | TRANSFER_DST
+		),*/
+	},
+	jobs: {
+		"fill-whole": Clear(
+			FillBuffer(
+				buffer: "buffer.1",
+				start: Some(0),
+				end: None,
+				data: 0xFF0000,
+			),
+		),
+		"fill-first": Clear(
+			FillBuffer(
+				buffer: "buffer.2",
+				start: Some(0),
+				end: Some(4),
+				data: 0xFF00,
+			),
+		),
+		"fill-last": Clear(
+			FillBuffer(
+				buffer: "buffer.3",
+				start: Some(4),
+				end: Some(8),
+				data: 0xFF,
+			),
+		),
+		/*"fill-whole-nearest-multiple": Clear(
+			FillBuffer(
+				buffer: "buffer.4",
+				start: Some(0),
+				end: None,
+				data: 0x00,
+			),
+		),*/
+	}
+)
