@@ -1,8 +1,7 @@
 //! Functionality only required for backend implementations.
 
 use Backend;
-use queue::{QueueFamily, QueueFamilyId, Queues};
-use auxil::FastHashMap;
+use queue::{QueueFamily, Queues};
 
 /// Bare-metal queue group.
 ///
@@ -36,7 +35,7 @@ impl<B: Backend> RawQueueGroup<B> {
 
 impl<B: Backend> Queues<B> {
     /// Create a new collection of queues.
-    pub fn new(queues: FastHashMap<QueueFamilyId, RawQueueGroup<B>>) -> Self {
+    pub fn new(queues: Vec<RawQueueGroup<B>>) -> Self {
         Queues(queues)
     }
 }

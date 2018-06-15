@@ -18,7 +18,7 @@ use hal::auxil::FastHashMap;
 use hal::device::{BindError, OutOfMemory, FramebufferError, ShaderError};
 use hal::memory::Properties;
 use hal::pool::CommandPoolCreateFlags;
-use hal::queue::{QueueFamily as HalQueueFamily, QueueFamilyId, Queues};
+use hal::queue::{QueueFamilyId, Queues};
 use hal::range::RangeArg;
 
 use cocoa::foundation::{NSRange, NSUInteger};
@@ -318,7 +318,6 @@ impl hal::PhysicalDevice<Backend> for PhysicalDevice {
         assert_eq!(families.len(), 1);
         assert_eq!(families[0].1.len(), 1);
         let family = *families[0].0;
-        let id = family.id();
 
         if cfg!(feature = "auto-capture") {
             let device = self.shared.device.lock().unwrap();
@@ -338,12 +337,9 @@ impl hal::PhysicalDevice<Backend> for PhysicalDevice {
             memory_types: self.memory_types,
         };
 
-        let mut queues = FastHashMap::default();
-        queues.insert(id, queue_group);
-
         Ok(hal::Gpu {
             device,
-            queues: Queues::new(queues),
+            queues: Queues::new(vec![queue_group]),
         })
     }
 
