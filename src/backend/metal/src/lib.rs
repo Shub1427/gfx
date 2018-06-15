@@ -12,6 +12,7 @@ extern crate core_graphics;
 extern crate block;
 extern crate smallvec;
 extern crate spirv_cross;
+extern crate fxhash;
 
 extern crate metal_rs as metal;
 

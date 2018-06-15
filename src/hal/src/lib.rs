@@ -8,6 +8,7 @@ extern crate bitflags;
 #[macro_use]
 extern crate failure;
 extern crate smallvec;
+extern crate fxhash;
 
 #[cfg(feature = "mint")]
 extern crate mint;
@@ -54,6 +55,9 @@ pub mod query;
 pub mod queue;
 pub mod range;
 pub mod window;
+
+#[doc(hidden)]
+pub mod auxil;
 
 #[doc(hidden)]
 pub mod backend;

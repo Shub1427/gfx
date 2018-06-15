@@ -2,8 +2,7 @@
 
 use Backend;
 use queue::{QueueFamily, QueueFamilyId, Queues};
-
-use std::collections::HashMap;
+use auxil::FastHashMap;
 
 /// Bare-metal queue group.
 ///
@@ -37,7 +36,7 @@ impl<B: Backend> RawQueueGroup<B> {
 
 impl<B: Backend> Queues<B> {
     /// Create a new collection of queues.
-    pub fn new(queues: HashMap<QueueFamilyId, RawQueueGroup<B>>) -> Self {
+    pub fn new(queues: FastHashMap<QueueFamilyId, RawQueueGroup<B>>) -> Self {
         Queues(queues)
     }
 }
