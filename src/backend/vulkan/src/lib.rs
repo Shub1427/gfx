@@ -652,6 +652,7 @@ impl hal::PhysicalDevice<Backend> for PhysicalDevice {
             framebuffer_stencil_samples_count: limits.framebuffer_stencil_sample_counts.flags() as _,
             max_color_attachments: limits.max_color_attachments as _,
             non_coherent_atom_size: limits.non_coherent_atom_size as _,
+            max_sampler_anisotropy: limits.max_sampler_anisotropy,
         }
     }
 }
