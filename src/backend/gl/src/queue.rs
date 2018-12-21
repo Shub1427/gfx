@@ -736,7 +736,7 @@ impl hal::queue::RawCommandQueue<Backend> for CommandQueue {
         fence.map(|fence| self.signal_fence(fence));
     }
 
-    #[cfg(feature = "glutin")]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "glutin"))]
     fn present<IS, S, IW>(&mut self, swapchains: IS, _wait_semaphores: IW) -> Result<(), ()>
     where
         IS: IntoIterator<Item = (S, hal::SwapImageIndex)>,
@@ -744,8 +744,6 @@ impl hal::queue::RawCommandQueue<Backend> for CommandQueue {
         IW: IntoIterator,
         IW::Item: Borrow<native::Semaphore>,
     {
-        use glutin::GlContext;
-
         for swapchain in swapchains {
             swapchain.0
                 .borrow()
@@ -754,6 +752,17 @@ impl hal::queue::RawCommandQueue<Backend> for CommandQueue {
                 .unwrap();
         }
 
+        Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn present<IS, S, IW>(&mut self, swapchains: IS, _wait_semaphores: IW) -> Result<(), ()>
+    where
+        IS: IntoIterator<Item = (S, hal::SwapImageIndex)>,
+        S: Borrow<window::web::Swapchain>,
+        IW: IntoIterator,
+        IW::Item: Borrow<native::Semaphore>,
+    {
         Ok(())
     }
 

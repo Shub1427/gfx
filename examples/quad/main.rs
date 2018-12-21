@@ -19,11 +19,13 @@ extern crate gfx_backend_metal as back;
 extern crate gfx_backend_vulkan as back;
 extern crate gfx_hal as hal;
 
-#[cfg(feature = "gl")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "gl"))]
 use back::glutin::GlContext;
 
+#[cfg(not(target_arch = "wasm32"))]
 extern crate glsl_to_spirv;
 extern crate image;
+#[cfg(not(target_arch = "wasm32"))]
 extern crate winit;
 
 use hal::format::{AsFormat, ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
@@ -77,8 +79,9 @@ const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
 fn main() {
     env_logger::init();
 
+    #[cfg(not(target_arch = "wasm32"))]
     let mut events_loop = winit::EventsLoop::new();
-
+    #[cfg(not(target_arch = "wasm32"))]
     let wb = winit::WindowBuilder::new()
         .with_dimensions(winit::dpi::LogicalSize::new(
             DIMS.width as _,
@@ -95,11 +98,16 @@ fn main() {
     };
     #[cfg(feature = "gl")]
     let (mut adapters, mut surface) = {
+        #[cfg(not(target_arch = "wasm32"))]
         let window = {
             let builder =
                 back::config_context(back::glutin::ContextBuilder::new(), ColorFormat::SELF, None)
                     .with_vsync(true);
             back::glutin::GlWindow::new(wb, builder, &events_loop).unwrap()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let window = {
+            back::Window
         };
 
         let surface = back::Surface::from_window(window);
@@ -443,6 +451,7 @@ fn main() {
             &[(pso::ShaderStageFlags::VERTEX, 0..8)],
         ).expect("Can't create pipeline layout");
     let pipeline = {
+        #[cfg(not(target_arch = "wasm32"))]
         let vs_module = {
             let glsl = fs::read_to_string("quad/data/quad.vert").unwrap();
             let spirv: Vec<u8> = glsl_to_spirv::compile(&glsl, glsl_to_spirv::ShaderType::Vertex)
@@ -452,6 +461,11 @@ fn main() {
                 .collect();
             device.create_shader_module(&spirv).unwrap()
         };
+        #[cfg(target_arch = "wasm32")]
+        let vs_module = {
+            device.create_shader_module(&vec![]).unwrap()
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         let fs_module = {
             let glsl = fs::read_to_string("quad/data/quad.frag").unwrap();
             let spirv: Vec<u8> = glsl_to_spirv::compile(&glsl, glsl_to_spirv::ShaderType::Fragment)
@@ -460,6 +474,10 @@ fn main() {
                 .map(|b| b.unwrap())
                 .collect();
             device.create_shader_module(&spirv).unwrap()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let fs_module = {
+            device.create_shader_module(&vec![]).unwrap()
         };
 
         let pipeline = {
@@ -554,6 +572,7 @@ fn main() {
         height: 0,
     };
     while running {
+        #[cfg(not(target_arch = "wasm32"))]
         events_loop.poll_events(|event| {
             if let winit::Event::WindowEvent { event, .. } = event {
                 #[allow(unused_variables)]

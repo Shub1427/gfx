@@ -15,6 +15,7 @@ use hal::pool::CommandPoolCreateFlags;
 use hal::queue::QueueFamilyId;
 use hal::range::RangeArg;
 
+#[cfg(not(target_arch = "wasm32"))]
 use spirv_cross::{glsl, spirv, ErrorCode as SpirvErrorCode};
 
 use {Backend as B, Share, Surface, Swapchain, Starc};
@@ -24,6 +25,7 @@ use pool::{BufferMemory, OwnedBuffer, RawCommandPool};
 
 /// Emit error during shader module creation. Used if we don't expect an error
 /// but might panic due to an exception in SPIRV-Cross.
+#[cfg(not(target_arch = "wasm32"))]
 fn gen_unexpected_error(err: SpirvErrorCode) -> d::ShaderError {
     let msg = match err {
         SpirvErrorCode::CompilationError(msg) => msg,
@@ -197,6 +199,7 @@ impl Device {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn parse_spirv(&self, raw_data: &[u8]) -> Result<spirv::Ast<glsl::Target>, d::ShaderError> {
         // spec requires "codeSize must be a multiple of 4"
         assert_eq!(raw_data.len() & 3, 0);
@@ -218,6 +221,7 @@ impl Device {
             })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn specialize_ast(
         &self,
         ast: &mut spirv::Ast<glsl::Target>,
@@ -247,6 +251,7 @@ impl Device {
         Ok(())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn translate_spirv(
         &self,
         ast: &mut spirv::Ast<glsl::Target>,
@@ -285,6 +290,7 @@ impl Device {
             })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn remap_bindings(
         &self,
         ast: &mut spirv::Ast<glsl::Target>,
@@ -296,6 +302,7 @@ impl Device {
         self.remap_binding(ast, desc_remap_data, nb_map, &res.uniform_buffers, n::BindingTypes::UniformBuffers);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn remap_binding(
         &self,
         ast: &mut spirv::Ast<glsl::Target>,
@@ -321,6 +328,7 @@ impl Device {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn combine_separate_images_and_samplers(
         &self,
         ast: &mut spirv::Ast<glsl::Target>,
@@ -364,6 +372,7 @@ impl Device {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn populate_id_map(
         &self,
         ast: &mut spirv::Ast<glsl::Target>,
@@ -390,6 +399,16 @@ impl Device {
                 debug!("Can't remap bindings for raw shaders. Assuming they are already rebound.");
                 raw
             }
+            #[cfg(target_arch = "wasm32")]
+            n::ShaderModule::Spirv(ref spirv) => {
+                let shader = match self.create_shader_module_from_source("".as_bytes(), stage).unwrap() {
+                    n::ShaderModule::Raw(raw) => raw,
+                    _ => panic!("Unhandled")
+                };
+
+                shader
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             n::ShaderModule::Spirv(ref spirv) => {
                 let mut ast = self.parse_spirv(spirv).unwrap();
 
