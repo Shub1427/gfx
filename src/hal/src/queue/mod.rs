@@ -10,7 +10,6 @@ pub mod capability;
 pub mod family;
 pub mod submission;
 
-use std::any::Any;
 use std::borrow::Borrow;
 use std::marker::PhantomData;
 
@@ -42,9 +41,25 @@ pub enum QueueType {
     Transfer,
 }
 
+#[cfg(target_arch = "wasm32")]
+mod bounds {
+    use std::any::Any;
+    pub trait RawCommandQueueBounds: Any {}
+    impl<T: Any> RawCommandQueueBounds for T {}
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod bounds {
+    use std::any::Any;
+    pub trait RawCommandQueueBounds: Any + Send + Sync {}
+    impl<T: Any + Send + Sync> RawCommandQueueBounds for T {}
+}
+
+use self::bounds::RawCommandQueueBounds;
+
 /// `RawCommandQueue` are abstractions to the internal GPU execution engines.
 /// Commands are executed on the the device by submitting command buffers to queues.
-pub trait RawCommandQueue<B: Backend>: Any + Send + Sync {
+pub trait RawCommandQueue<B: Backend>: RawCommandQueueBounds {
     /// Submit command buffers to queue for execution.
     /// `fence` will be signalled after submission and _must_ be unsignalled.
     ///

@@ -14,6 +14,18 @@ pub extern crate glutin;
 extern crate smallvec;
 #[cfg(not(target_arch = "wasm32"))]
 extern crate spirv_cross;
+#[cfg(target_arch = "wasm32")]
+extern crate web_sys;
+#[cfg(target_arch = "wasm32")]
+extern crate wasm_bindgen;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 
 use std::cell::Cell;
 use std::fmt;
@@ -43,8 +55,63 @@ pub use window::glutin::{config_context, Headless, Surface, Swapchain};
 #[cfg(target_arch = "wasm32")]
 pub use window::web::{Surface, Swapchain, Window};
 
+#[cfg(not(target_arch = "wasm32"))]
+type GlContext = gl::Gl;
+#[cfg(target_arch = "wasm32")]
+type GlContext = web_sys::WebGl2RenderingContext; // TODO: WebGL1
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlBuffer = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlBuffer = web_sys::WebGlBuffer;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlBufferOwned = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlBufferOwned = Rc<web_sys::WebGlBuffer>;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlProgram = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlProgram = web_sys::WebGlProgram;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlProgramOwned = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlProgramOwned = Rc<web_sys::WebGlProgram>;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlShader = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlShader = web_sys::WebGlShader;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlShaderOwned = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlShaderOwned = Rc<web_sys::WebGlShader>;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlTexture = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlTexture = web_sys::WebGlTexture;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlTextureOwned = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlTextureOwned = Rc<web_sys::WebGlTexture>;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlSampler = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlSampler = web_sys::WebGlSampler;
+
+#[cfg(not(target_arch = "wasm32"))]
+type GlSamplerOwned = gl::types::GLuint;
+#[cfg(target_arch = "wasm32")]
+type GlSamplerOwned = Rc<web_sys::WebGlSampler>;
+
 pub(crate) struct GlContainer {
-    context: gl::Gl,
+    context: GlContext,
 }
 
 impl GlContainer {
@@ -54,10 +121,15 @@ impl GlContainer {
 }
 
 impl Deref for GlContainer {
-    type Target = gl::Gl;
-    fn deref(&self) -> &gl::Gl {
+    type Target = GlContext;
+    #[cfg(not(target_arch = "wasm32"))]
+    fn deref(&self) -> &GlContext {
         #[cfg(feature = "glutin")]
         self.make_current();
+        &self.context
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn deref(&self) -> &GlContext {
         &self.context
     }
 }
@@ -145,6 +217,9 @@ impl Share {
     fn check(&self) -> Result<(), Error> {
         if cfg!(debug_assertions) {
             let gl = &self.context;
+            #[cfg(target_arch = "wasm32")]
+            let err = Error::from_error_code(0);
+            #[cfg(not(target_arch = "wasm32"))]
             let err = Error::from_error_code(unsafe { gl.GetError() });
             if err != Error::NoError {
                 return Err(err);
@@ -245,11 +320,36 @@ unsafe impl<T: ?Sized> Sync for Wstarc<T> {}
 #[derive(Debug)]
 pub struct PhysicalDevice(Starc<Share>);
 
+#[wasm_bindgen]
+extern "C" {
+    // Use `js_namespace` here to bind `console.log(..)` instead of just
+    // `log(..)`
+    #[wasm_bindgen(js_namespace = window, getter)]
+    fn context2() -> web_sys::WebGl2RenderingContext;
+}
+
 impl PhysicalDevice {
     fn new_adapter<F>(fn_proc: F) -> hal::Adapter<Backend>
     where
         F: FnMut(&str) -> *const std::os::raw::c_void,
     {
+        #[cfg(target_arch = "wasm32")]
+        let gl = {
+            let document = web_sys::window().unwrap().document().unwrap();
+            /*let canvas = document.get_element_by_id("canvas").unwrap();
+            let canvas: web_sys::HtmlCanvasElement = canvas.dyn_into::<web_sys::HtmlCanvasElement>().unwrap();
+            let context = canvas
+                .get_context("webgl2")
+                .unwrap()
+                .unwrap()
+                .dyn_into::<web_sys::WebGl2RenderingContext>()
+                .unwrap();*/
+            let context = context2();
+            GlContainer {
+                context,
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         let gl = GlContainer {
             context: gl::Gl::load_with(fn_proc),
         };
@@ -266,7 +366,7 @@ impl PhysicalDevice {
         for extension in info.extensions.iter() {
             debug!("- {}", *extension);
         }
-        let name = info.platform_name.renderer.into();
+        let name = info.platform_name.renderer.to_string();
 
         // create the shared context
         let share = Share {
@@ -320,10 +420,16 @@ impl hal::PhysicalDevice<Backend> for PhysicalDevice {
             .contains(info::LegacyFeatures::SRGB_COLOR)
         {
             // TODO: Find way to emulate this on older Opengl versions.
-            unsafe {
-                gl.Enable(gl::FRAMEBUFFER_SRGB);
-            }
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
+            unsafe { gl.Enable(gl::FRAMEBUFFER_SRGB); }
         }
+
+        #[cfg(target_arch = "wasm32")]
+        gl.pixel_storei(gl::UNPACK_ALIGNMENT, 1);
+
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe {
             gl.PixelStorei(gl::UNPACK_ALIGNMENT, 1);
 
@@ -335,6 +441,9 @@ impl hal::PhysicalDevice<Backend> for PhysicalDevice {
         // create main VAO and bind it
         let mut vao = 0;
         if self.0.private_caps.vertex_array {
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe {
                 gl.GenVertexArrays(1, &mut vao);
                 gl.BindVertexArray(vao);

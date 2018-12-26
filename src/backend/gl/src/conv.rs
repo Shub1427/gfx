@@ -32,7 +32,7 @@ pub fn filter_to_gl(mag: i::Filter, min: i::Filter, mip: i::Filter) -> (t::GLenu
         (Linear, Nearest) => gl::LINEAR_MIPMAP_NEAREST,
         (Linear, Linear) => gl::LINEAR_MIPMAP_LINEAR,
     };
-
+web_sys::console::log_1(&format!("filter_to_gl() filter: {:?} {:?}", min_filter, mag_filter).into());
     (min_filter, mag_filter)
 }
 

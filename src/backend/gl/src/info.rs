@@ -4,37 +4,37 @@ use {gl, GlContainer, Error};
 use hal::{Features, Limits};
 
 /// A version number for a specific component of an OpenGL implementation
-#[derive(Copy, Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Version {
     pub is_embedded: bool,
     pub major: u32,
     pub minor: u32,
     pub revision: Option<u32>,
-    pub vendor_info: &'static str,
+    pub vendor_info: String,
 }
 
 impl Version {
     /// Create a new OpenGL version number
     pub fn new(
         major: u32, minor: u32, revision: Option<u32>,
-        vendor_info: &'static str,
+        vendor_info: String,
     ) -> Self {
         Version {
             is_embedded: false,
-            major: major,
-            minor: minor,
-            revision: revision,
-            vendor_info: vendor_info,
+            major,
+            minor,
+            revision,
+            vendor_info,
         }
     }
     /// Create a new OpenGL ES version number
-    pub fn new_embedded(major: u32, minor: u32, vendor_info: &'static str) -> Self {
+    pub fn new_embedded(major: u32, minor: u32, vendor_info: String) -> Self {
         Version {
             is_embedded: true,
-            major: major,
-            minor: minor,
+            major,
+            minor,
             revision: None,
-            vendor_info: vendor_info,
+            vendor_info,
         }
     }
 
@@ -58,19 +58,29 @@ impl Version {
     /// Note that this function is intentionally lenient in regards to parsing,
     /// and will try to recover at least the first two version numbers without
     /// resulting in an `Err`.
-    pub fn parse(mut src: &'static str) -> Result<Version, &'static str> {
+    pub fn parse(mut src: String) -> Result<Version, String> {
         let es_sig = " ES ";
         let is_es = match src.rfind(es_sig) {
             Some(pos) => {
-                src = &src[pos + es_sig.len() ..];
+                src = src[pos + es_sig.len() ..].to_string();
                 true
             },
             None => false,
         };
-        let (version, vendor_info) = match src.find(' ') {
-            Some(i) => (&src[..i], &src[i+1..]),
-            None => (src, ""),
-        };
+
+        let version;
+        let vendor_info;
+
+        match src.find(' ') {
+            Some(i) => {
+                version = &src[..i];
+                vendor_info = src[i+1..].to_string();
+            }
+            None => {
+                version = src.as_str();
+                vendor_info = "".to_string();
+            }
+        }
 
         // TODO: make this even more lenient so that we can also accept
         // `<major> "." <minor> [<???>]`
@@ -82,19 +92,19 @@ impl Version {
         match (major, minor, revision) {
             (Some(major), Some(minor), revision) => Ok(Version {
                 is_embedded: is_es,
-                major: major,
-                minor: minor,
-                revision: revision,
-                vendor_info: vendor_info,
+                major,
+                minor,
+                revision,
+                vendor_info,
             }),
-            (_, _, _) => Err(src),
+            (_, _, _) => Err(src.to_string()),
         }
     }
 }
 
 impl fmt::Debug for Version {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match (self.major, self.minor, self.revision, self.vendor_info) {
+        match (self.major, self.minor, self.revision, &self.vendor_info[..]) {
             (major, minor, Some(revision), "") =>
                 write!(f, "{}.{}.{}", major, minor, revision),
             (major, minor, None, "") =>
@@ -107,27 +117,45 @@ impl fmt::Debug for Version {
     }
 }
 
-const EMPTY_STRING: &'static str = "";
-
 /// Get a statically allocated string from the implementation using
 /// `glGetString`. Fails if it `GLenum` cannot be handled by the
 /// implementation's `gl.GetString` function.
-fn get_string(gl: &GlContainer, name: gl::types::GLenum) -> &'static str {
-    let ptr = unsafe { gl.GetString(name) } as *const i8;
-    if !ptr.is_null() {
-        // This should be safe to mark as statically allocated because
-        // GlGetString only returns static strings.
-        unsafe { c_str_as_static_str(ptr) }
-    } else {
-        error!("Invalid GLenum passed to `get_string`: {:x}", name);
-        EMPTY_STRING
-    }
+fn get_string(gl: &GlContainer, name: gl::types::GLenum) -> String {
+web_sys::console::log_1(&format!("get_string() {:?} {:?}", name, match gl.get_parameter(name) {
+    Ok(r) => r.as_string(),
+    Err(e) => e.as_string(),
+}).into());
+    #[cfg(not(target_arch = "wasm32"))]
+    let string = {
+        let ptr = unsafe { gl.GetString(name) } as *const i8;
+        if !ptr.is_null() {
+            unsafe { c_str_as_string(ptr) }
+        } else {
+            error!("Invalid GLenum passed to `get_string`: {:x}", name);
+            "".to_string()
+        }
+    };
+    #[cfg(target_arch = "wasm32")]
+    let string = {
+        gl.get_parameter(name).unwrap().as_string().unwrap()
+    };
+    string
 }
 
 fn get_usize(gl: &GlContainer, name: gl::types::GLenum) -> Result<usize, Error> {
-    let mut value = 0 as gl::types::GLint;
-    unsafe { gl.GetIntegerv(name, &mut value) };
+web_sys::console::log_1(&format!("get_usize() {:?}", name).into());
+    #[cfg(target_arch = "wasm32")]
+    let value = gl.get_parameter(name).unwrap().as_f64().unwrap();
+    #[cfg(not(target_arch = "wasm32"))]
+    let value = {
+        let mut tmp = 0 as gl::types::GLint;
+        unsafe { gl.GetIntegerv(name, &mut tmp) };
+        tmp
+    };
 
+    #[cfg(target_arch = "wasm32")]
+    let err = Error::NoError; // Ignore all errors for now
+    #[cfg(not(target_arch = "wasm32"))]
     let err = Error::from_error_code(unsafe { gl.GetError() });
     if err != Error::NoError {
         Err(err)
@@ -136,18 +164,17 @@ fn get_usize(gl: &GlContainer, name: gl::types::GLenum) -> Result<usize, Error> 
     }
 }
 
-unsafe fn c_str_as_static_str(c_str: *const i8) -> &'static str {
-    //TODO: avoid transmuting
-    mem::transmute(str::from_utf8(ffi::CStr::from_ptr(c_str as *const _).to_bytes()).unwrap())
+unsafe fn c_str_as_string(c_str: *const i8) -> String {
+    str::from_utf8(ffi::CStr::from_ptr(c_str as *const _).to_bytes()).unwrap().to_string()
 }
 
 /// A unique platform identifier that does not change between releases
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct PlatformName {
     /// The company responsible for the OpenGL implementation
-    pub vendor: &'static str,
+    pub vendor: String,
     /// The name of the renderer
-    pub renderer: &'static str,
+    pub renderer: String,
 }
 
 impl PlatformName {
@@ -195,7 +222,7 @@ pub struct Info {
     /// The GLSL version number
     pub shading_language: Version,
     /// The extensions supported by the implementation
-    pub extensions: HashSet<&'static str>,
+    pub extensions: HashSet<String>,
 }
 
 bitflags! {
@@ -249,42 +276,45 @@ impl Info {
         let platform_name = PlatformName::get(gl);
         let version = Version::parse(get_string(gl, gl::VERSION)).unwrap();
         let shading_language = Version::parse(get_string(gl, gl::SHADING_LANGUAGE_VERSION)).unwrap();
-        let extensions = if version >= Version::new(3, 0, None, "") {
+        #[cfg(target_arch = "wasm32")]
+        let extensions = HashSet::new();
+        #[cfg(not(target_arch = "wasm32"))]
+        let extensions = if version >= Version::new(3, 0, None, "".to_string()) {
             let num_exts = get_usize(gl, gl::NUM_EXTENSIONS).unwrap() as gl::types::GLuint;
             (0..num_exts)
-                .map(|i| unsafe { c_str_as_static_str(gl.GetStringi(gl::EXTENSIONS, i) as *const i8) })
+                .map(|i| unsafe { c_str_as_string(gl.GetStringi(gl::EXTENSIONS, i) as *const i8) })
                 .collect()
         } else {
             // Fallback
-            get_string(gl, gl::EXTENSIONS).split(' ').collect()
+            get_string(gl, gl::EXTENSIONS).split(' ').map(str::to_string).collect()
         };
         Info {
-            platform_name: platform_name,
-            version: version,
-            shading_language: shading_language,
-            extensions: extensions,
+            platform_name,
+            version,
+            shading_language,
+            extensions,
         }
     }
 
     pub fn is_version_supported(&self, major: u32, minor: u32) -> bool {
-        !self.version.is_embedded && self.version >= Version::new(major, minor, None, "")
+        !self.version.is_embedded && self.version >= Version::new(major, minor, None, "".to_string())
     }
 
     pub fn is_embedded_version_supported(&self, major: u32, minor: u32) -> bool {
-        self.version.is_embedded && self.version >= Version::new(major, minor, None, "")
+        self.version.is_embedded && self.version >= Version::new(major, minor, None, "".to_string())
     }
 
     /// Returns `true` if the implementation supports the extension
-    pub fn is_extension_supported(&self, s: &'static str) -> bool {
-        self.extensions.contains(&s)
+    pub fn is_extension_supported(&self, ext: &str) -> bool {
+        self.extensions.iter().any(|s| ext  == s.as_str())
     }
 
-    pub fn is_version_or_extension_supported(&self, major: u32, minor: u32, ext: &'static str) -> bool {
+    pub fn is_version_or_extension_supported(&self, major: u32, minor: u32, ext: &str) -> bool {
         self.is_version_supported(major, minor) || self.is_extension_supported(ext)
     }
 
-    pub fn is_any_extension_supported(&self, exts: &[&'static str]) -> bool {
-        exts.iter().any(|e| self.extensions.contains(e))
+    pub fn is_any_extension_supported(&self, exts: &[&str]) -> bool {
+        exts.iter().any(|e| self.extensions.iter().any(|s| *e == s.as_str()))
     }
 
     pub fn is_supported(&self, requirements: &[Requirement]) -> bool {
@@ -304,10 +334,14 @@ impl Info {
 pub(crate) fn query_all(gl: &GlContainer) -> (Info, Features, LegacyFeatures, Limits, PrivateCaps) {
     use self::Requirement::*;
     let info = Info::get(gl);
+    #[cfg(target_arch = "wasm32")]
+    let max_texel_elements = 64;
+    #[cfg(not(target_arch = "wasm32"))]
+    let max_texel_elements = get_usize(gl, gl::MAX_TEXTURE_BUFFER_SIZE).unwrap_or(0);
 
     let mut limits = Limits {
         max_texture_size: get_usize(gl, gl::MAX_TEXTURE_SIZE).unwrap_or(64),
-        max_texel_elements: get_usize(gl, gl::MAX_TEXTURE_BUFFER_SIZE).unwrap_or(0),
+        max_texel_elements,
         max_viewports: 1,
         min_buffer_copy_offset_alignment: 1,
         min_buffer_copy_pitch_alignment: 1,
@@ -337,6 +371,9 @@ pub(crate) fn query_all(gl: &GlContainer) -> (Info, Features, LegacyFeatures, Li
             .zip(limits.max_compute_group_size.iter_mut())
             .enumerate()
         {
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe {
                 gl.GetIntegeri_v(gl::MAX_COMPUTE_WORK_GROUP_COUNT, i as _, &mut values[0]);
                 gl.GetIntegeri_v(gl::MAX_COMPUTE_WORK_GROUP_SIZE, i as _, &mut values[1]);
@@ -356,11 +393,18 @@ pub(crate) fn query_all(gl: &GlContainer) -> (Info, Features, LegacyFeatures, Li
     ]) {
         features |= Features::SAMPLER_ANISOTROPY;
     }
-    if info.is_supported(&[
-        Core(4, 2),
-    ]) {
+
+    #[cfg(target_arch = "wasm32")] // TODO WebGL1
+    {
         legacy |= LegacyFeatures::EXPLICIT_LAYOUTS_IN_SHADER;
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if info.is_supported(&[Core(4, 2)]) {
+            legacy |= LegacyFeatures::EXPLICIT_LAYOUTS_IN_SHADER;
+        }
+    }
+
     if info.is_supported(&[
         Core(3, 3),
         Es(3, 0),
@@ -369,16 +413,28 @@ pub(crate) fn query_all(gl: &GlContainer) -> (Info, Features, LegacyFeatures, Li
         features |= Features::INSTANCE_RATE;
     }
 
-    if info.is_supported(&[Core(4, 3), Es(3, 1)]) { // TODO: extension
-        legacy |= LegacyFeatures::INDIRECT_EXECUTION;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if info.is_supported(&[Core(4, 3), Es(3, 1)]) { // TODO: extension
+            legacy |= LegacyFeatures::INDIRECT_EXECUTION;
+        }
     }
-    if info.is_supported(&[
-        Core(3, 1),
-        Es(3, 0),
-        Ext("GL_ARB_draw_instanced"),
-    ]) {
+
+    #[cfg(target_arch = "wasm32")] // TODO WebGL1 ext
+    {
         legacy |= LegacyFeatures::DRAW_INSTANCED;
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if info.is_supported(&[
+            Core(3, 1),
+            Es(3, 0),
+            Ext("GL_ARB_draw_instanced"),
+        ]) {
+            legacy |= LegacyFeatures::DRAW_INSTANCED;
+        }
+    }
+
     if info.is_supported(&[
         Core(4, 2),
         Ext("GL_ARB_base_instance"),
@@ -388,9 +444,18 @@ pub(crate) fn query_all(gl: &GlContainer) -> (Info, Features, LegacyFeatures, Li
     if info.is_supported(&[Core(3, 2)]) { // TODO: extension
         legacy |= LegacyFeatures::DRAW_INDEXED_BASE;
     }
-    if info.is_supported(&[Core(3, 1), Es(3, 0)]) { // TODO: extension
+
+    #[cfg(target_arch = "wasm32")] // TODO WebGL1 ext
+    {
         legacy |= LegacyFeatures::DRAW_INDEXED_INSTANCED;
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if info.is_supported(&[Core(3, 1), Es(3, 0)]) { // TODO: extension
+            legacy |= LegacyFeatures::DRAW_INDEXED_INSTANCED;
+        }
+    }
+
     if info.is_supported(&[Core(3, 2)]) { // TODO: extension
         legacy |= LegacyFeatures::DRAW_INDEXED_INSTANCED_BASE_VERTEX;
     }
@@ -442,19 +507,43 @@ pub(crate) fn query_all(gl: &GlContainer) -> (Info, Features, LegacyFeatures, Li
         legacy |= LegacyFeatures::SAMPLER_BORDER_COLOR;
     }
 
+    #[cfg(target_arch = "wasm32")]
+    let vertex_array = false; // TODO
+    #[cfg(not(target_arch = "wasm32"))]
+    let vertex_array = info.is_supported(&[Core(3, 0), Es(3, 0), Ext ("GL_ARB_vertex_array_object")]) &&
+        gl.GenVertexArrays.is_loaded();
+    #[cfg(target_arch = "wasm32")]
+    let framebuffer = false; // TODO
+    #[cfg(not(target_arch = "wasm32"))]
+    let framebuffer = info.is_supported(&[Core(3, 0), Es(2, 0), Ext ("GL_ARB_framebuffer_object")]) &&
+        gl.GenFramebuffers.is_loaded();
+
+    #[cfg(target_arch = "wasm32")]
+    let buffer_role_change = true; // TODO: WebGL1
+    #[cfg(not(target_arch = "wasm32"))]
+    let buffer_role_change = !info.version.is_embedded;
+
+    #[cfg(target_arch = "wasm32")]
+    let image_storage = true; // TODO
+    #[cfg(not(target_arch = "wasm32"))]
+    let image_storage = info.is_supported(&[Core(4,2), Ext("GL_ARB_texture_storage")]);
+
+    #[cfg(target_arch = "wasm32")]
+    let sync = false;
+    #[cfg(not(target_arch = "wasm32"))]
+    let sync = info.is_supported(&[Core(3,2), Es(3,0), Ext("GL_ARB_sync")]);
+
+    #[cfg(target_arch = "wasm32")]
+    let map = true; // Emulate
+    #[cfg(not(target_arch = "wasm32"))]
+    let map = !info.version.is_embedded; //TODO: OES extension
+
     let private = PrivateCaps {
-        vertex_array:                       info.is_supported(&[Core(3,0),
-                                                                Es  (3,0),
-                                                                Ext ("GL_ARB_vertex_array_object")])
-                                                                && gl.GenVertexArrays.is_loaded(),
-        framebuffer:                        info.is_supported(&[Core(3,0),
-                                                                Es  (2,0),
-                                                                Ext ("GL_ARB_framebuffer_object")])
-                                                                && gl.GenFramebuffers.is_loaded(),
+        vertex_array,
+        framebuffer,
         framebuffer_texture:                info.is_supported(&[Core(3,0)]), //TODO: double check
-        buffer_role_change:                 !info.version.is_embedded,
-        image_storage:                      info.is_supported(&[Core(4,2),
-                                                                Ext ("GL_ARB_texture_storage")]),
+        buffer_role_change,
+        image_storage,
         buffer_storage:                     info.is_supported(&[Core(4,4),
                                                                 Ext ("GL_ARB_buffer_storage")]),
         clear_buffer:                       info.is_supported(&[Core(3,0),
@@ -462,10 +551,8 @@ pub(crate) fn query_all(gl: &GlContainer) -> (Info, Features, LegacyFeatures, Li
         program_interface:                  info.is_supported(&[Core(4,3),
                                                                 Ext ("GL_ARB_program_interface_query")]),
         frag_data_location:                 !info.version.is_embedded,
-        sync:                               info.is_supported(&[Core(3,2),
-                                                                Es  (3,0),
-                                                                Ext ("GL_ARB_sync")]),
-        map:                                !info.version.is_embedded, //TODO: OES extension
+        sync,
+        map,
         sampler_anisotropy_ext:             !info.is_supported(&[Core(4,6),
                                                                 Ext ("GL_ARB_texture_filter_anisotropic")]) &&
                                             info.is_supported(&[Ext ("GL_EXT_texture_filter_anisotropic")]),

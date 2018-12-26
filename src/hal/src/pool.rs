@@ -9,7 +9,6 @@ use command::{
 };
 use queue::capability::{Supports, Graphics};
 
-use std::any::Any;
 use std::marker::PhantomData;
 
 bitflags!(
@@ -24,8 +23,24 @@ bitflags!(
     }
 );
 
+#[cfg(target_arch = "wasm32")]
+mod bounds {
+    use std::any::Any;
+    pub trait RawCommandPoolBounds: Any {}
+    impl<T: Any> RawCommandPoolBounds for T {}
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod bounds {
+    use std::any::Any;
+    pub trait RawCommandPoolBounds: Any + Send + Sync {}
+    impl<T: Any + Send + Sync> RawCommandPoolBounds for T {}
+}
+
+use self::bounds::RawCommandPoolBounds;
+
 /// The allocated command buffers are associated with the creating command queue.
-pub trait RawCommandPool<B: Backend>: Any + Send + Sync {
+pub trait RawCommandPool<B: Backend>: RawCommandPoolBounds {
     /// Reset the command pool and the corresponding command buffers.
     ///
     /// # Synchronization: You may _not_ free the pool if a command buffer is still in use (pool memory still in use)
@@ -84,6 +99,7 @@ impl<B: Backend, C> CommandPool<B, C> {
     /// Reserve an additional amount of primary command buffers.
     pub fn reserve(&mut self, additional: usize) {
         let available = self.buffers.len() - self.next_buffer;
+web_sys::console::log_1(&format!("reserve() additional, {:?} available, {:?}", additional, available).into());
         if additional > available {
             let buffers = self.raw.allocate(additional - available, RawLevel::Primary);
             self.buffers.extend(buffers);
@@ -107,15 +123,21 @@ impl<B: Backend, C> CommandPool<B, C> {
     pub fn acquire_command_buffer<S: Shot>(
         &mut self, allow_pending_resubmit: bool
     ) -> CommandBuffer<B, C, S> {
+web_sys::console::log_1(&format!("acquire_command_buffer() reserve1").into());
         self.reserve(1);
-
+web_sys::console::log_1(&format!("acquire_command_buffer() access buffer").into());
+web_sys::console::log_1(&format!("acquire_command_buffer() next_buffer {:?}, len {:?}", self.next_buffer, self.buffers.len()).into());
         let buffer = &mut self.buffers[self.next_buffer];
+web_sys::console::log_1(&format!("acquire_command_buffer() flags").into());
         let mut flags = S::FLAGS;
         if allow_pending_resubmit {
             flags |= CommandBufferFlags::SIMULTANEOUS_USE;
         }
+web_sys::console::log_1(&format!("acquire_command_buffer() begin").into());
         buffer.begin(flags, CommandBufferInheritanceInfo::default());
+web_sys::console::log_1(&format!("acquire_command_buffer() next_buffer").into());
         self.next_buffer += 1;
+web_sys::console::log_1(&format!("acquire_command_buffer() new").into());
         unsafe {
             CommandBuffer::new(buffer)
         }

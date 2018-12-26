@@ -1,11 +1,14 @@
 use std::borrow::Borrow;
-use std::cell::Cell;
+use std::cell::{Ref, RefCell};
 use std::iter::repeat;
 use std::ops::Range;
 use std::{ptr, mem, slice};
 use std::sync::{Arc, Mutex, RwLock};
 
-use {gl, GlContainer};
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
+
+use {gl, GlBufferOwned, GlContainer, GlShader, GlShaderOwned};
 use gl::types::{GLint, GLenum, GLfloat};
 
 use hal::{self as c, device as d, error, image as i, memory, pass, pso, buffer, mapping, query};
@@ -34,25 +37,43 @@ fn gen_unexpected_error(err: SpirvErrorCode) -> d::ShaderError {
     d::ShaderError::CompilationFailed(msg)
 }
 
-fn get_shader_iv(gl: &GlContainer, name: n::Shader, query: GLenum) -> gl::types::GLint {
-    let mut iv = 0;
-    unsafe { gl.GetShaderiv(name, query, &mut iv) };
+fn get_shader_iv(gl: &GlContainer, name: &GlShader, query: GLenum) -> gl::types::GLint {
+    #[cfg(target_arch = "wasm32")]
+    let iv = gl.get_shader_parameter(name, query).as_bool().unwrap() as i32; // TODO other types
+    #[cfg(not(target_arch = "wasm32"))]
+    let iv = unsafe {
+        let mut tmp = 0;
+        gl.GetShaderiv(*name, query, &mut tmp);
+        tmp
+    };
     iv
 }
 
-fn get_program_iv(gl: &GlContainer, name: n::Program, query: GLenum) -> gl::types::GLint {
-    let mut iv = 0;
-    unsafe { gl.GetProgramiv(name, query, &mut iv) };
+fn get_program_iv(gl: &GlContainer, name: &n::Program, query: GLenum) -> gl::types::GLint {
+    #[cfg(target_arch = "wasm32")]
+    let iv = gl.get_program_parameter(name, query).as_bool().unwrap() as i32; // TODO other types
+    #[cfg(not(target_arch = "wasm32"))]
+    let iv = unsafe {
+        let mut tmp = 0;
+        gl.GetProgramiv(*name, query, &mut tmp);
+        tmp
+    };
     iv
 }
 
-fn get_shader_log(gl: &GlContainer, name: n::Shader) -> String {
+fn get_shader_log(gl: &GlContainer, name: &GlShader) -> String {
+    #[cfg(target_arch = "wasm32")]
+    return gl.get_shader_info_log(name).unwrap();
+
     let mut length = get_shader_iv(gl, name, gl::INFO_LOG_LENGTH);
     if length > 0 {
         let mut log = String::with_capacity(length as usize);
         log.extend(repeat('\0').take(length as usize));
+        #[cfg(target_arch = "wasm32")]
+        unimplemented!();
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe {
-            gl.GetShaderInfoLog(name, length, &mut length,
+            gl.GetShaderInfoLog(*name, length, &mut length,
                 (&log[..]).as_ptr() as *mut gl::types::GLchar);
         }
         log.truncate(length as usize);
@@ -62,13 +83,19 @@ fn get_shader_log(gl: &GlContainer, name: n::Shader) -> String {
     }
 }
 
-pub(crate) fn get_program_log(gl: &GlContainer, name: n::Program) -> String {
+pub(crate) fn get_program_log(gl: &GlContainer, name: &n::Program) -> String {
+    #[cfg(target_arch = "wasm32")]
+    return gl.get_program_info_log(name).unwrap();
+
     let mut length  = get_program_iv(gl, name, gl::INFO_LOG_LENGTH);
     if length > 0 {
         let mut log = String::with_capacity(length as usize);
         log.extend(repeat('\0').take(length as usize));
+        #[cfg(target_arch = "wasm32")]
+        unimplemented!();
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe {
-            gl.GetProgramInfoLog(name, length, &mut length,
+            gl.GetProgramInfoLog(*name, length, &mut length,
                 (&log[..]).as_ptr() as *mut gl::types::GLchar);
         }
         log.truncate(length as usize);
@@ -82,9 +109,10 @@ fn create_fbo_internal(share: &Starc<Share>) -> Option<gl::types::GLuint> {
     if share.private_caps.framebuffer {
         let gl = &share.context;
         let mut name = 0 as n::FrameBuffer;
-        unsafe {
-            gl.GenFramebuffers(1, &mut name);
-        }
+        #[cfg(target_arch = "wasm32")]
+        unimplemented!();
+        #[cfg(not(target_arch = "wasm32"))]
+        unsafe { gl.GenFramebuffers(1, &mut name); }
         info!("\tCreated frame buffer {}", name);
         Some(name)
     } else {
@@ -94,7 +122,7 @@ fn create_fbo_internal(share: &Starc<Share>) -> Option<gl::types::GLuint> {
 
 #[derive(Debug)]
 pub struct UnboundBuffer {
-    name: n::RawBuffer,
+    name: GlBufferOwned,
     target: GLenum,
     requirements: memory::Requirements,
 }
@@ -145,25 +173,45 @@ impl Device {
             _ => return Err(d::ShaderError::UnsupportedStage(stage)),
         };
 
+        #[cfg(target_arch = "wasm32")]
+        let name = gl.create_shader(target).unwrap();
+        #[cfg(target_arch = "wasm32")]
+        unsafe { // TODO
+            let source = ::std::str::from_utf8(data).unwrap();
+//web_sys::console::log_1(&format!("shader source: {:?}", source).into());
+            gl.shader_source(&name, source);
+            gl.compile_shader(&name);
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         let name = unsafe { gl.CreateShader(target) };
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe {
             gl.ShaderSource(name, 1,
                 &(data.as_ptr() as *const gl::types::GLchar),
                 &(data.len() as gl::types::GLint));
             gl.CompileShader(name);
         }
+
+        #[cfg(not(target_arch = "wasm32"))]
         info!("\tCompiled shader {}", name);
         if let Err(err) = self.share.check() {
             panic!("Error compiling shader: {:?}", err);
         }
 
-        let status = get_shader_iv(gl, name, gl::COMPILE_STATUS);
-        let log = get_shader_log(gl, name);
+        let status = get_shader_iv(gl, &name, gl::COMPILE_STATUS);
+web_sys::console::log_1(&format!("shader compile status {:?}", status).into());
+        let log = get_shader_log(gl, &name);
+web_sys::console::log_1(&format!("shader compile log {:?}", log).into());
         if status != 0 {
             if !log.is_empty() {
                 warn!("\tLog: {}", log);
             }
-            Ok(n::ShaderModule::Raw(name))
+            #[cfg(target_arch = "wasm32")]
+            let ret = Rc::new(name);
+            #[cfg(not(target_arch = "wasm32"))]
+            let ret = name;
+            Ok(n::ShaderModule::Raw(ret))
         } else {
             Err(d::ShaderError::CompilationFailed(log))
         }
@@ -172,14 +220,25 @@ impl Device {
     fn bind_target_compat(gl: &GlContainer, point: GLenum, attachment: GLenum, view: &n::ImageView) {
         match *view {
             n::ImageView::Surface(surface) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferRenderbuffer(point, attachment, gl::RENDERBUFFER, surface);
             },
-            n::ImageView::Texture(texture, level) => unsafe {
+            n::ImageView::Texture(ref texture, level) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindTexture(gl::TEXTURE_2D, texture);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferTexture2D(point, attachment, gl::TEXTURE_2D, texture, level as _);
             },
-            n::ImageView::TextureLayer(texture, level, layer) => unsafe {
+            n::ImageView::TextureLayer(ref texture, level, layer) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindTexture(gl::TEXTURE_2D, texture);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferTexture3D(point, attachment, gl::TEXTURE_2D, texture, level as _, layer as _);
             },
         }
@@ -188,12 +247,21 @@ impl Device {
     fn bind_target(gl: &GlContainer, point: GLenum, attachment: GLenum, view: &n::ImageView) {
         match *view {
             n::ImageView::Surface(surface) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferRenderbuffer(point, attachment, gl::RENDERBUFFER, surface);
             },
-            n::ImageView::Texture(texture, level) => unsafe {
+            n::ImageView::Texture(ref texture, level) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferTexture(point, attachment, texture, level as _);
             },
-            n::ImageView::TextureLayer(texture, level, layer) => unsafe {
+            n::ImageView::TextureLayer(ref texture, level, layer) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferTextureLayer(point, attachment, texture, level as _, layer as _);
             },
         }
@@ -392,16 +460,50 @@ impl Device {
         stage: pso::Stage,
         desc_remap_data: &mut n::DescRemapData,
         name_binding_map: &mut FastHashMap<String, pso::DescriptorBinding>,
-    ) -> n::Shader {
+    ) -> GlShaderOwned {
         assert_eq!(point.entry, "main");
         match *point.module {
-            n::ShaderModule::Raw(raw) => {
+            n::ShaderModule::Raw(ref raw) => {
                 debug!("Can't remap bindings for raw shaders. Assuming they are already rebound.");
-                raw
+                raw.clone()
             }
             #[cfg(target_arch = "wasm32")]
             n::ShaderModule::Spirv(ref spirv) => {
-                let shader = match self.create_shader_module_from_source("".as_bytes(), stage).unwrap() {
+                let shader_source = match stage {
+                        pso::Stage::Vertex => {
+                            r"#version 300 es
+                            const float scale = 1.2f;
+
+                            layout(location = 0) in vec2 a_pos;
+                            layout(location = 1) in vec2 a_uv;
+                            out vec2 v_uv;
+
+                            void main() {
+                                v_uv = a_uv;
+                                gl_Position = vec4(a_pos, 0.0, 1.0);
+                                gl_Position.y = -gl_Position.y;
+                            }
+                            "
+                        }
+                        pso::Stage::Fragment => {
+                            r"#version 300 es
+                            precision mediump float;
+
+                            in vec2 v_uv;
+                            layout(location = 0) out vec4 target0;
+
+                            uniform sampler2D u_texture;
+
+                            void main() {
+                                target0 = texture(u_texture, v_uv);
+                            }
+                            "
+                        }
+                        _ => "",
+                    }.as_bytes();
+                let compiled = self.create_shader_module_from_source(shader_source, stage);
+//web_sys::console::log_1(&format!("compiled: {:?}", compiled).into());
+                let shader = match compiled.unwrap() {
                     n::ShaderModule::Raw(raw) => raw,
                     _ => panic!("Unhandled")
                 };
@@ -488,8 +590,9 @@ impl d::Device<B> for Device {
         // TODO
         Ok(n::Memory {
             properties: memory::Properties::CPU_VISIBLE | memory::Properties::CPU_CACHED,
-            first_bound_buffer: Cell::new(0),
+            first_bound_buffer: RefCell::new(None),
             size,
+            mapped_memory: RefCell::new(None),
         })
     }
 
@@ -522,6 +625,9 @@ impl d::Device<B> for Device {
         unsafe {
             if let Some(fbo) = pool.fbo {
                 let gl = &self.share.context;
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.DeleteFramebuffers(1, &fbo);
             }
         }
@@ -647,6 +753,9 @@ impl d::Device<B> for Device {
         };
 
         let program = {
+            #[cfg(target_arch = "wasm32")]
+            let name = gl.create_program().unwrap();
+            #[cfg(not(target_arch = "wasm32"))]
             let name = unsafe { gl.CreateProgram() };
 
             // Attach shaders to program
@@ -669,6 +778,9 @@ impl d::Device<B> for Device {
                             &mut desc.layout.desc_remap_data.write().unwrap(),
                             &mut name_binding_map,
                         );
+                        #[cfg(target_arch = "wasm32")]
+                        gl.attach_shader(&name, &shader_name);
+                        #[cfg(not(target_arch = "wasm32"))]
                         unsafe { gl.AttachShader(name, shader_name); }
                         shader_name
                     })
@@ -679,18 +791,31 @@ impl d::Device<B> for Device {
                 for i in 0..subpass.color_attachments.len() {
                     let color_name = format!("Target{}\0", i);
                     unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        unimplemented!();
+                        #[cfg(not(target_arch = "wasm32"))]
                         gl.BindFragDataLocation(name, i as u32, (&color_name[..]).as_ptr() as *mut gl::types::GLchar);
                     }
                 }
             }
 
+            #[cfg(target_arch = "wasm32")]
+            gl.link_program(&name);
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe { gl.LinkProgram(name) };
+            #[cfg(not(target_arch = "wasm32"))]
             info!("\tLinked program {}", name);
             if let Err(err) = share.check() {
                 panic!("Error linking program: {:?}", err);
             }
 
             for shader_name in shader_names {
+                #[cfg(target_arch = "wasm32")]
+                unsafe {
+                    gl.detach_shader(&name, shader_name);
+                    gl.delete_shader(Some(shader_name));
+                }
+                #[cfg(not(target_arch = "wasm32"))]
                 unsafe {
                     gl.DetachShader(name, *shader_name);
                     gl.DeleteShader(*shader_name);
@@ -700,16 +825,23 @@ impl d::Device<B> for Device {
             if !self.share.legacy_features.contains(LegacyFeatures::EXPLICIT_LAYOUTS_IN_SHADER) {
                 let gl = &self.share.context;
                 unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    gl.use_program(Some(&name));
+                    #[cfg(not(target_arch = "wasm32"))]
                     gl.UseProgram(name);
                     for (bname, binding) in name_binding_map.iter() {
+                        #[cfg(target_arch = "wasm32")]
+                        unimplemented!();
+                        #[cfg(not(target_arch = "wasm32"))]
                         let loc = gl.GetUniformLocation(name, bname.as_ptr() as _);
+                        #[cfg(not(target_arch = "wasm32"))]
                         gl.Uniform1i(loc, *binding as _);
                     }
                 }
             }
 
-            let status = get_program_iv(gl, name, gl::LINK_STATUS);
-            let log = get_program_log(gl, name);
+            let status = get_program_iv(gl, &name, gl::LINK_STATUS);
+            let log = get_program_log(gl, &name);
             if status != 0 {
                 if !log.is_empty() {
                     warn!("\tLog: {}", log);
@@ -718,7 +850,11 @@ impl d::Device<B> for Device {
                 return Err(pso::CreationError::Shader(d::ShaderError::CompilationFailed(log)));
             }
 
-            name
+            #[cfg(target_arch = "wasm32")]
+            let ret = Rc::new(name);
+            #[cfg(not(target_arch = "wasm32"))]
+            let ret = name;
+            ret
         };
 
         let patch_size = match desc.input_assembler.primitive {
@@ -764,6 +900,9 @@ impl d::Device<B> for Device {
         let share = &self.share;
 
         let program = {
+            #[cfg(target_arch = "wasm32")]
+            let name = gl.create_program().unwrap();
+            #[cfg(not(target_arch = "wasm32"))]
             let name = unsafe { gl.CreateProgram() };
 
             let mut name_binding_map = FastHashMap::<String, pso::DescriptorBinding>::default();
@@ -773,14 +912,28 @@ impl d::Device<B> for Device {
                 &mut desc.layout.desc_remap_data.write().unwrap(),
                 &mut name_binding_map,
             );
-            unsafe { gl.AttachShader(name, shader) };
-
-            unsafe { gl.LinkProgram(name) };
+            #[cfg(target_arch = "wasm32")]
+            unsafe {
+                gl.attach_shader(&name, &shader);
+                gl.link_program(&name);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            unsafe {
+                gl.AttachShader(name, shader);
+                gl.LinkProgram(name);
+            };
+            #[cfg(not(target_arch = "wasm32"))]
             info!("\tLinked program {}", name);
             if let Err(err) = share.check() {
                 panic!("Error linking program: {:?}", err);
             }
 
+            #[cfg(target_arch = "wasm32")]
+            unsafe {
+                gl.detach_shader(&name, &shader);
+                gl.delete_shader(Some(&shader));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe {
                 gl.DetachShader(name, shader);
                 gl.DeleteShader(shader);
@@ -788,6 +941,9 @@ impl d::Device<B> for Device {
 
             if !self.share.legacy_features.contains(LegacyFeatures::EXPLICIT_LAYOUTS_IN_SHADER) {
                 let gl = &self.share.context;
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 unsafe {
                     gl.UseProgram(name);
                     for (bname, binding) in name_binding_map.iter() {
@@ -797,8 +953,8 @@ impl d::Device<B> for Device {
                 }
             }
 
-            let status = get_program_iv(gl, name, gl::LINK_STATUS);
-            let log = get_program_log(gl, name);
+            let status = get_program_iv(gl, &name, gl::LINK_STATUS);
+            let log = get_program_log(gl, &name);
             if status != 0 {
                 if !log.is_empty() {
                     warn!("\tLog: {}", log);
@@ -807,7 +963,12 @@ impl d::Device<B> for Device {
                 return Err(pso::CreationError::Other);
             }
 
-            name
+            
+            #[cfg(target_arch = "wasm32")]
+            let ret = Rc::new(name);
+            #[cfg(not(target_arch = "wasm32"))]
+            let ret = name;
+            ret
         };
 
         Ok(n::ComputePipeline {
@@ -832,6 +993,9 @@ impl d::Device<B> for Device {
         let gl = &self.share.context;
         let target = gl::DRAW_FRAMEBUFFER;
         let mut name = 0;
+        #[cfg(target_arch = "wasm32")]
+        unimplemented!();
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe {
             gl.GenFramebuffers(1, &mut name);
             gl.BindFramebuffer(target, name);
@@ -857,6 +1021,9 @@ impl d::Device<B> for Device {
         assert_eq!(attachments_len, pass.attachments.len());
         // attachments_len actually equals min(attachments.len(), att_points.len()) until the next assert
 
+        #[cfg(target_arch = "wasm32")]
+        unimplemented!();
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe {
             assert!(pass.attachments.len() <= att_points.len());
             gl.DrawBuffers(attachments_len as _, att_points.as_ptr());
@@ -885,10 +1052,22 @@ impl d::Device<B> for Device {
         }
 
         let gl = &self.share.context;
-        let mut name = 0 as n::Sampler;
 
-
-        unsafe {
+        #[cfg(target_arch = "wasm32")]
+        let name = Rc::new(gl.create_sampler().unwrap());
+        let name = unsafe {
+            let tmp = gl.create_sampler().unwrap();
+            set_sampler_info(
+                &self.share,
+                &info,
+                |a, b| gl.sampler_parameterf(&name, a, b),
+                |a, b| unimplemented!(),
+                |a, b| gl.sampler_parameteri(&name, a, b),
+            );
+            Rc::new(tmp)
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let name = unsafe {
             gl.GenSamplers(1, &mut name);
             set_sampler_info(
                 &self.share,
@@ -897,7 +1076,7 @@ impl d::Device<B> for Device {
                 |a, b| gl.SamplerParameterfv(name, a, &b[0]),
                 |a, b| gl.SamplerParameteri(name, a, b),
             );
-        }
+        };
 
         if let Err(_) = self.share.check() {
             Err(d::AllocationError::OutOfMemory(d::OutOfMemory::OutOfHostMemory))
@@ -924,10 +1103,14 @@ impl d::Device<B> for Device {
         };
 
         let gl = &self.share.context;
-        let mut name = 0;
-        unsafe {
-            gl.GenBuffers(1, &mut name);
-        }
+        #[cfg(target_arch = "wasm32")]
+        let name = Rc::new(gl.create_buffer().unwrap());
+        #[cfg(not(target_arch = "wasm32"))]
+        let name = unsafe {
+            let mut tmp = 0;
+            gl.GenBuffers(1, &mut tmp);
+            tmp
+        };
 
         Ok(UnboundBuffer {
             name,
@@ -951,9 +1134,10 @@ impl d::Device<B> for Device {
         let target = unbound.target;
 
         if offset == 0 {
-            memory.first_bound_buffer.set(unbound.name);
+            let mut first = memory.first_bound_buffer.borrow_mut();
+            *first = Some(unbound.name.clone());
         } else {
-            assert_ne!(0, memory.first_bound_buffer.get());
+            assert!(memory.first_bound_buffer.borrow_mut().is_some());
         }
 
         let cpu_can_read = memory.can_download();
@@ -963,6 +1147,9 @@ impl d::Device<B> for Device {
             //TODO: gl::DYNAMIC_STORAGE_BIT | gl::MAP_PERSISTENT_BIT
             let flags = memory.map_flags();
             //TODO: use *Named calls to avoid binding
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe {
                 gl.BindBuffer(target, unbound.name);
                 gl.BufferStorage(target,
@@ -975,14 +1162,29 @@ impl d::Device<B> for Device {
         }
         else {
             let flags = if cpu_can_read && cpu_can_write {
+web_sys::console::log_1(&format!("bufferdata dynamic draw {:?}", gl::DYNAMIC_DRAW).into());
                 gl::DYNAMIC_DRAW
             } else if cpu_can_write {
+web_sys::console::log_1(&format!("bufferdata stream draw").into());
                 gl::STREAM_DRAW
             } else if cpu_can_read {
+web_sys::console::log_1(&format!("bufferdata stream read").into());
                 gl::STREAM_READ
             } else {
+web_sys::console::log_1(&format!("bufferdata stream draw").into());
                 gl::STATIC_DRAW
             };
+web_sys::console::log_1(&format!("bind_buffer to unbound name from bind_buffer_memory").into());
+            #[cfg(target_arch = "wasm32")]
+            unsafe {
+                gl.bind_buffer(target, Some(&unbound.name));
+                gl.buffer_data_with_i32(target,
+                    unbound.requirements.size as _,
+                    flags,
+                );
+                gl.bind_buffer(target, None);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe {
                 gl.BindBuffer(target, unbound.name);
                 gl.BufferData(target,
@@ -1010,18 +1212,38 @@ impl d::Device<B> for Device {
         &self, memory: &n::Memory, range: R
     ) -> Result<*mut u8, mapping::Error> {
         let gl = &self.share.context;
-        let buffer = match memory.first_bound_buffer.get() {
-            0 => panic!("No buffer has been bound yet, can't map memory!"),
-            other => other,
-        };
+        let buffer = Ref::map(memory.first_bound_buffer.borrow(), |first| match first {
+            None => panic!("No buffer has been bound yet, can't map memory!"),
+            Some(ref name) => name,
+        }).clone();
 
         assert!(self.share.private_caps.buffer_role_change);
         let target = gl::PIXEL_PACK_BUFFER;
+//TODO
+        #[cfg(target_arch = "wasm32")]
+        let access = gl::STATIC_DRAW;
+        #[cfg(not(target_arch = "wasm32"))]
         let access = memory.map_flags();
 
         let offset = *range.start().unwrap_or(&0);
         let size = *range.end().unwrap_or(&memory.size) - offset;
 
+        #[cfg(target_arch = "wasm32")]
+        let ptr = unsafe {
+            //TODO temp hack, pass through cell somehow?
+web_sys::console::log_1(&format!("bind_buffer to something from map_memory").into());
+            gl.bind_buffer(target, Some(&*buffer));
+let mapped = vec![0; size as usize].into_boxed_slice();
+let tmp = Box::into_raw(mapped) as *mut u8;
+let mut mapped_memory = memory.mapped_memory.borrow_mut();
+*mapped_memory = Some(tmp);
+
+            //let mut tmp: Vec<u8> = vec![0; size as usize];
+            //gl.buffer_data_with_u8_array(target, &mut tmp[..], access);
+            //Box::into_raw(vec![1.0; size as usize].into_boxed_slice()) as *mut _
+            tmp
+        };
+        #[cfg(not(target_arch = "wasm32"))]
         let ptr = unsafe {
             gl.BindBuffer(target, buffer);
             let ptr = gl.MapBufferRange(target, offset as _, size as _, access);
@@ -1038,12 +1260,22 @@ impl d::Device<B> for Device {
 
     fn unmap_memory(&self, memory: &n::Memory) {
         let gl = &self.share.context;
+        #[cfg(not(target_arch = "wasm32"))]
         let buffer = match memory.first_bound_buffer.get() {
-            0 => panic!("No buffer has been bound yet, can't map memory!"),
-            other => other,
+            None => panic!("No buffer has been bound yet, can't map memory!"),
+            Some(name) => name,
         };
         let target = gl::PIXEL_PACK_BUFFER;
-
+// TODO: Temporary hack, handle multiple mapped regions, etc.
+        #[cfg(target_arch = "wasm32")]
+        unsafe {
+            let raw = memory.mapped_memory.replace(None).unwrap();
+            let mut mapped = slice::from_raw_parts_mut(raw, memory.size as usize);
+// TODO: Access
+            gl.buffer_data_with_u8_array(target, mapped, gl::DYNAMIC_DRAW);
+            *Box::from_raw(raw);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe {
             gl.BindBuffer(target, buffer);
             gl.UnmapBuffer(target);
@@ -1104,18 +1336,47 @@ impl d::Device<B> for Device {
             usage.contains(i::Usage::STORAGE) ||
             usage.contains(i::Usage::SAMPLED)
         {
-            let mut name = 0;
-            unsafe { gl.GenTextures(1, &mut name) };
+            #[cfg(target_arch = "wasm32")]
+            let raw_name = gl.create_texture().unwrap();
+            #[cfg(not(target_arch = "wasm32"))]
+            let name = unsafe {
+                let mut tmp = 0;
+                gl.GenTextures(1, &mut tmp);
+                tmp
+            };
+web_sys::console::log_1(&format!("3").into());
             match kind {
                 i::Kind::D2(w, h, 1, 1) => unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    gl.bind_texture(gl::TEXTURE_2D, Some(&raw_name));
+                    #[cfg(not(target_arch = "wasm32"))]
                     gl.BindTexture(gl::TEXTURE_2D, name);
                     if self.share.private_caps.image_storage {
+                        #[cfg(target_arch = "wasm32")]
+                        gl.tex_storage_2d(gl::TEXTURE_2D, num_levels as _, int_format, w as _, h as _);
+                        #[cfg(not(target_arch = "wasm32"))]
                         gl.TexStorage2D(gl::TEXTURE_2D, num_levels as _, int_format, w as _, h as _);
                     } else {
+                        #[cfg(target_arch = "wasm32")]
+                        gl.tex_parameteri(gl::TEXTURE_2D, gl::TEXTURE_MAX_LEVEL, (num_levels - 1) as _);
+                        #[cfg(not(target_arch = "wasm32"))]
                         gl.TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAX_LEVEL, (num_levels - 1) as _);
                         let mut w = w;
                         let mut h = h;
                         for i in 0..num_levels {
+                            #[cfg(target_arch = "wasm32")]
+                            gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_i32(
+                                gl::TEXTURE_2D,
+                                i as _,
+                                int_format as _,
+                                w as _,
+                                h as _,
+                                0,
+                                iformat,
+                                itype,
+                                0,
+                            );
+                            #[cfg(not(target_arch = "wasm32"))]
                             gl.TexImage2D(
                                 gl::TEXTURE_2D,
                                 i as _,
@@ -1134,13 +1395,23 @@ impl d::Device<B> for Device {
                 }
                 _ => unimplemented!(),
             };
+            #[cfg(target_arch = "wasm32")]
+            let name = Rc::new(raw_name);
             n::ImageKind::Texture(name)
         } else {
             let mut name = 0;
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe { gl.GenRenderbuffers(1, &mut name) };
+web_sys::console::log_1(&format!("2").into());
             match kind {
                 i::Kind::D2(w, h, 1, 1) => unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    unimplemented!();
+                    #[cfg(not(target_arch = "wasm32"))]
                     gl.BindRenderbuffer(gl::RENDERBUFFER, name);
+                    #[cfg(not(target_arch = "wasm32"))]
                     gl.RenderbufferStorage(gl::RENDERBUFFER, int_format, w as _, h as _);
                 }
                 _ => unimplemented!(),
@@ -1152,7 +1423,7 @@ impl d::Device<B> for Device {
         let bytes_per_texel  = surface_desc.bits / 8;
         let ext = kind.extent();
         let size = (ext.width * ext.height * ext.depth) as u64 * bytes_per_texel as u64;
-
+web_sys::console::log_1(&format!("1").into());
         if let Err(err) = self.share.check() {
             panic!("Error creating image: {:?} for kind {:?} of {:?}",
                 err, kind, format);
@@ -1212,12 +1483,12 @@ impl d::Device<B> for Device {
                     Err(i::ViewError::Layer(i::LayerError::OutOfBounds(range.layers)))
                 }
             }
-            n::ImageKind::Texture(texture) => {
+            n::ImageKind::Texture(ref texture) => {
                 //TODO: check that `level` exists
                 if range.layers.start == 0 {
-                    Ok(n::ImageView::Texture(texture, level))
+                    Ok(n::ImageView::Texture(texture.clone(), level))
                 } else if range.layers.start + 1 == range.layers.end {
-                    Ok(n::ImageView::TextureLayer(texture, level, range.layers.start))
+                    Ok(n::ImageView::TextureLayer(texture.clone(), level, range.layers.start))
                 } else {
                     Err(i::ViewError::Layer(i::LayerError::OutOfBounds(range.layers)))
                 }
@@ -1267,7 +1538,7 @@ impl d::Device<B> for Device {
                             .push(n::DescSetBindings::Buffer {
                                 ty: n::BindingTypes::UniformBuffers,
                                 binding,
-                                buffer: buffer.raw,
+                                buffer: buffer.raw.clone(),
                                 offset,
                                 size,
                             });
@@ -1279,13 +1550,13 @@ impl d::Device<B> for Device {
                             n::ImageView::Texture(tex, _)
                             | n::ImageView::TextureLayer(tex, _, _) =>
                                 bindings
-                                .push(n::DescSetBindings::Texture(binding, *tex)),
+                                .push(n::DescSetBindings::Texture(binding, tex.clone())),
                             n::ImageView::Surface(_) => unimplemented!(),
                         }
                         match sampler {
                             n::FatSampler::Sampler(sampler) =>
                                 bindings
-                                .push(n::DescSetBindings::Sampler(binding, *sampler)),
+                                .push(n::DescSetBindings::Sampler(binding, sampler.clone())),
                             n::FatSampler::Info(info) =>
                                 bindings
                                 .push(n::DescSetBindings::SamplerInfo(binding, info.clone())),
@@ -1296,15 +1567,15 @@ impl d::Device<B> for Device {
                             n::ImageView::Texture(tex, _)
                             | n::ImageView::TextureLayer(tex, _, _) =>
                                 bindings
-                                .push(n::DescSetBindings::Texture(binding, *tex)),
+                                .push(n::DescSetBindings::Texture(binding, tex.clone())),
                             n::ImageView::Surface(_) => unimplemented!(),
                         }
                     }
-                    pso::Descriptor::Sampler(sampler) => {
+                    pso::Descriptor::Sampler(ref sampler) => {
                         match sampler {
                             n::FatSampler::Sampler(sampler) =>
                                 bindings
-                                .push(n::DescSetBindings::Sampler(binding, *sampler)),
+                                .push(n::DescSetBindings::Sampler(binding, sampler.clone())),
                             n::FatSampler::Info(info) =>
                                 bindings
                                 .push(n::DescSetBindings::SamplerInfo(binding, info.clone())),
@@ -1334,6 +1605,9 @@ impl d::Device<B> for Device {
     fn create_fence(&self, signalled: bool) -> Result<n::Fence, d::OutOfMemory> {
         let sync = if signalled && self.share.private_caps.sync {
             let gl = &self.share.context;
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe { gl.FenceSync(gl::SYNC_GPU_COMMANDS_COMPLETE, 0) }
         } else {
             ptr::null()
@@ -1347,6 +1621,10 @@ impl d::Device<B> for Device {
         I::Item: Borrow<n::Fence>,
     {
         let gl = &self.share.context;
+
+        //#[cfg(target_arch = "wasm32")]
+        //unimplemented!();
+        #[cfg(not(target_arch = "wasm32"))]
         for fence in fences {
             let fence = fence.borrow();
             let sync = fence.0.get();
@@ -1415,24 +1693,40 @@ impl d::Device<B> for Device {
     }
 
     fn destroy_graphics_pipeline(&self, pipeline: n::GraphicsPipeline) {
+        let gl = &self.share.context;
         unsafe {
-            self.share.context.DeleteProgram(pipeline.program);
+            #[cfg(target_arch = "wasm32")]
+            gl.delete_program(Some(&pipeline.program));
+            #[cfg(not(target_arch = "wasm32"))]
+            gl.DeleteProgram(pipeline.program);
         }
     }
 
     fn destroy_compute_pipeline(&self, pipeline: n::ComputePipeline) {
+        let gl = &self.share.context;
         unsafe {
-            self.share.context.DeleteProgram(pipeline.program);
+            #[cfg(target_arch = "wasm32")]
+            gl.delete_program(Some(&pipeline.program));
+            #[cfg(not(target_arch = "wasm32"))]
+            gl.DeleteProgram(pipeline.program);
         }
     }
 
     fn destroy_framebuffer(&self, frame_buffer: n::FrameBuffer) {
         let gl = &self.share.context;
-        unsafe { gl.DeleteFramebuffers(1, &frame_buffer); }
+        unsafe {
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
+            gl.DeleteFramebuffers(1, &frame_buffer);
+        }
     }
 
     fn destroy_buffer(&self, buffer: n::Buffer) {
         unsafe {
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             self.share.context.DeleteBuffers(1, &buffer.raw);
         }
     }
@@ -1443,8 +1737,18 @@ impl d::Device<B> for Device {
     fn destroy_image(&self, image: n::Image) {
         let gl = &self.share.context;
         match image.kind {
-            n::ImageKind::Surface(rb) => unsafe { gl.DeleteRenderbuffers(1, &rb) },
-            n::ImageKind::Texture(t) => unsafe { gl.DeleteTextures(1, &t) },
+            n::ImageKind::Surface(rb) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.DeleteRenderbuffers(1, &rb)
+            },
+            n::ImageKind::Texture(t) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.DeleteTextures(1, &t)
+            },
         }
     }
 
@@ -1455,7 +1759,12 @@ impl d::Device<B> for Device {
     fn destroy_sampler(&self, sampler: n::FatSampler) {
         let gl = &self.share.context;
         match sampler {
-            n::FatSampler::Sampler(s) => unsafe { gl.DeleteSamplers(1, &s) },
+            n::FatSampler::Sampler(s) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.DeleteSamplers(1, &s)
+            },
             _ => (),
         }
     }
@@ -1472,7 +1781,16 @@ impl d::Device<B> for Device {
         unsafe {
             let gl = &self.share.context;
             let sync = fence.0.get();
-            if self.share.private_caps.sync && gl.IsSync(sync) == gl::TRUE {
+            
+            #[cfg(target_arch = "wasm32")]
+            let should_delete_sync = false;
+            #[cfg(not(target_arch = "wasm32"))]
+            let should_delete_sync = self.share.private_caps.sync && gl.IsSync(sync) == gl::TRUE;
+
+            if should_delete_sync {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.DeleteSync(sync);
             }
         }
@@ -1496,7 +1814,12 @@ impl d::Device<B> for Device {
     }
 
     fn wait_idle(&self) -> Result<(), error::HostExecutionError> {
-        unsafe { self.share.context.Finish(); }
+        unsafe {
+            #[cfg(target_arch = "wasm32")]
+            self.share.context.finish();
+            #[cfg(not(target_arch = "wasm32"))]
+            self.share.context.Finish();
+        }
         Ok(())
     }
 }
@@ -1509,9 +1832,15 @@ pub(crate) fn wait_fence(fence: &n::Fence, share: &Starc<Share>, timeout_ns: u64
     let gl = &share.context;
     unsafe {
         if share.private_caps.sync {
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             gl.ClientWaitSync(fence.0.get(), gl::SYNC_FLUSH_COMMANDS_BIT, timeout_ns)
         } else {
             // We fallback to waiting for *everything* to finish
+            #[cfg(target_arch = "wasm32")]
+            gl.flush();
+            #[cfg(not(target_arch = "wasm32"))]
             gl.Flush();
             gl::CONDITION_SATISFIED
         }

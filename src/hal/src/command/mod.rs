@@ -95,7 +95,8 @@ pub type SecondaryCommandBuffer<'a, B, C, S = OneShot> = CommandBuffer<'a, B, C,
 /// A strongly-typed command buffer that will only implement methods that are valid for the operations
 /// it supports.
 pub struct CommandBuffer<'a, B: Backend, C, S: Shot = OneShot, L: Level = Primary> {
-    pub(crate) raw: &'a mut B::CommandBuffer,
+///
+pub raw: &'a mut B::CommandBuffer,
     pub(crate) _marker: PhantomData<(C, S, L)>
 }
 

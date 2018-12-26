@@ -2,6 +2,9 @@ use std::{mem, ptr, slice};
 use std::borrow::Borrow;
 use Starc;
 
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
+
 use hal;
 use hal::error;
 
@@ -10,7 +13,7 @@ use smallvec::SmallVec;
 
 use {command as com, native, state, window, device};
 use info::LegacyFeatures;
-use {Backend, Share};
+use {Backend, GlBuffer, GlContext, Share};
 
 pub type ArrayBuffer = gl::types::GLuint;
 
@@ -27,7 +30,10 @@ struct State {
     vao: bool,
     // Currently bound index/element buffer.
     // None denotes that we don't know what is currently bound.
-    index_buffer: Option<gl::types::GLuint>,
+    #[cfg(target_arch = "wasm32")]
+    index_buffer: Option<Rc<GlBuffer>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    index_buffer: Option<GlBuffer>,
     // Currently set viewports.
     num_viewports: usize,
     // Currently set scissor rects.
@@ -78,7 +84,7 @@ impl CommandQueue {
     ///
     /// > Note: Calling this function can have a noticeable impact on the performance
     ///         because the internal state cache will flushed.
-    pub unsafe fn with_gl<F: FnMut(&gl::Gl)>(&mut self, mut fun: F) {
+    pub unsafe fn with_gl<F: FnMut(&GlContext)>(&mut self, mut fun: F) {
         self.reset_state();
         fun(&self.share.context);
         // Flush the state to enforce a reset once a new command buffer
@@ -155,13 +161,22 @@ impl CommandQueue {
         let gl = &self.share.context;
         match view {
             &native::ImageView::Surface(surface) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferRenderbuffer(point, attachment, gl::RENDERBUFFER, surface);
             },
-            &native::ImageView::Texture(texture, level) => unsafe {
+            &native::ImageView::Texture(ref texture, level) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferTexture(point, attachment, texture,
                                       level as gl::types::GLint);
             },
-            &native::ImageView::TextureLayer(texture, level, layer) => unsafe {
+            &native::ImageView::TextureLayer(ref texture, level, layer) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.FramebufferTextureLayer(point, attachment, texture,
                                            level as gl::types::GLint,
                                            layer as gl::types::GLint);
@@ -171,6 +186,9 @@ impl CommandQueue {
 
     fn _unbind_target(&mut self, point: gl::types::GLenum, attachment: gl::types::GLenum) {
         let gl = &self.share.context;
+        #[cfg(target_arch = "wasm32")]
+        unimplemented!();
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe { gl.FramebufferTexture(point, attachment, 0, 0) };
     }
 
@@ -201,6 +219,9 @@ impl CommandQueue {
         // Bind default VAO
         if !self.state.vao {
             if self.share.private_caps.vertex_array {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 unsafe { gl.BindVertexArray(self.vao) };
             }
             self.state.vao = true
@@ -208,22 +229,38 @@ impl CommandQueue {
 
         // Reset indirect draw buffer
         if self.share.legacy_features.contains(LegacyFeatures::INDIRECT_EXECUTION) {
+            #[cfg(target_arch = "wasm32")]
+            unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe { gl.BindBuffer(gl::DRAW_INDIRECT_BUFFER, 0) };
         }
 
         // Unbind index buffers
         match self.state.index_buffer {
-            Some(0) => (), // Nothing to do
             Some(_) | None => {
-                unsafe { gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0) };
-                self.state.index_buffer = Some(0);
+web_sys::console::log_1(&format!("bind_buffer to nothing from reset_state").into());
+                #[cfg(target_arch = "wasm32")]
+                gl.bind_buffer(gl::ELEMENT_ARRAY_BUFFER, None);
+                #[cfg(not(target_arch = "wasm32"))]
+                unsafe {
+                    gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, 0);
+                }
+                self.state.index_buffer = None;
             }
         }
 
         // Reset viewports
         if self.state.num_viewports == 1 {
-            unsafe { gl.Viewport(0, 0, 0, 0) };
-            unsafe { gl.DepthRange(0.0, 1.0) };
+            unsafe {
+                #[cfg(target_arch = "wasm32")]
+                gl.viewport(0, 0, 0, 0);
+                #[cfg(target_arch = "wasm32")]
+                gl.depth_range(0.0, 1.0);
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.Viewport(0, 0, 0, 0);
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.DepthRange(0.0, 1.0);
+            };
         } else if self.state.num_viewports > 1 {
             // 16 viewports is a common limit set in drivers.
             let viewports: SmallVec<[[f32; 4]; 16]> =
@@ -234,12 +271,21 @@ impl CommandQueue {
                 (0..self.state.num_viewports)
                     .map(|_| [0.0, 0.0])
                     .collect();
-            unsafe { gl.ViewportArrayv(0, viewports.len() as i32, viewports.as_ptr() as *const _)};
-            unsafe { gl.DepthRangeArrayv(0, depth_ranges.len() as i32, depth_ranges.as_ptr() as *const _)};
+            unsafe {
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.ViewportArrayv(0, viewports.len() as i32, viewports.as_ptr() as *const _);
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.DepthRangeArrayv(0, depth_ranges.len() as i32, depth_ranges.as_ptr() as *const _);
+            }
         }
 
         // Reset scissors
         if self.state.num_scissors == 1 {
+            #[cfg(target_arch = "wasm32")]
+            gl.scissor(0, 0, 0, 0);
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe { gl.Scissor(0, 0, 0, 0) };
         } else if self.state.num_scissors > 1 {
             // 16 viewports is a common limit set in drivers.
@@ -247,16 +293,23 @@ impl CommandQueue {
                 (0..self.state.num_scissors)
                     .map(|_| [0, 0, 0, 0])
                     .collect();
+            //#[cfg(target_arch = "wasm32")]
+            //unimplemented!();
+            #[cfg(not(target_arch = "wasm32"))]
             unsafe { gl.ScissorArrayv(0, scissors.len() as i32, scissors.as_ptr() as *const _)};
         }
     }
 
     fn process(&mut self, cmd: &com::Command, data_buf: &[u8]) {
         match *cmd {
-            com::Command::BindIndexBuffer(buffer) => {
+            com::Command::BindIndexBuffer(ref buffer) => {
                 let gl = &self.share.context;
-                self.state.index_buffer = Some(buffer);
-                unsafe { gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, buffer) };
+                self.state.index_buffer = Some(buffer.clone());
+web_sys::console::log_1(&format!("bind_buffer for index buffer in process").into());
+                #[cfg(target_arch = "wasm32")]
+                gl.bind_buffer(gl::ELEMENT_ARRAY_BUFFER, Some(&**buffer));
+                #[cfg(not(target_arch = "wasm32"))]
+                unsafe { gl.BindBuffer(gl::ELEMENT_ARRAY_BUFFER, *buffer) };
             }
 //          com::Command::BindVertexBuffers(_data_ptr) =>
             com::Command::Draw { primitive, ref vertices, ref instances } => {
@@ -264,6 +317,14 @@ impl CommandQueue {
                 let legacy = &self.share.legacy_features;
                 if instances == &(0u32..1) {
                     unsafe {
+web_sys::console::log_1(&format!("draw 3").into());
+                        #[cfg(target_arch = "wasm32")]
+                        gl.draw_arrays(
+                            primitive,
+                            vertices.start as _,
+                            (vertices.end - vertices.start) as _,
+                        );
+                        #[cfg(not(target_arch = "wasm32"))]
                         gl.DrawArrays(
                             primitive,
                             vertices.start as _,
@@ -272,7 +333,16 @@ impl CommandQueue {
                     }
                 } else if legacy.contains(LegacyFeatures::DRAW_INSTANCED) {
                     if instances.start == 0 {
+web_sys::console::log_1(&format!("draw 2").into());
                         unsafe {
+                            #[cfg(target_arch = "wasm32")]
+                            gl.draw_arrays_instanced(
+                                primitive,
+                                vertices.start as _,
+                                (vertices.end - vertices.start) as _,
+                                instances.end as _,
+                            );
+                            #[cfg(not(target_arch = "wasm32"))]
                             gl.DrawArraysInstanced(
                                 primitive,
                                 vertices.start as _,
@@ -282,6 +352,17 @@ impl CommandQueue {
                         }
                     } else if legacy.contains(LegacyFeatures::DRAW_INSTANCED_BASE) {
                         unsafe {
+web_sys::console::log_1(&format!("draw 1").into());
+                            #[cfg(target_arch = "wasm32")]
+                            unimplemented!();
+                            /*gl.draw_arrays_instanced_base_instance(
+                                primitive,
+                                vertices.start as _,
+                                (vertices.end - vertices.start) as _,
+                                (instances.end - instances.start) as _,
+                                instances.start as _,
+                            );*/
+                            #[cfg(not(target_arch = "wasm32"))]
                             gl.DrawArraysInstancedBaseInstance(
                                 primitive,
                                 vertices.start as _,
@@ -305,6 +386,11 @@ impl CommandQueue {
                 if instances == &(0u32..1) {
                     if base_vertex == 0 {
                         unsafe {
+web_sys::console::log_1(&format!("draw 4").into());
+//web_sys::console::log_1(&format!("queue 11").into());
+                            #[cfg(target_arch = "wasm32")]
+                            unimplemented!();
+                            #[cfg(not(target_arch = "wasm32"))]
                             gl.DrawElements(
                                 primitive,
                                 index_count as _,
@@ -314,6 +400,11 @@ impl CommandQueue {
                         }
                     } else if legacy.contains(LegacyFeatures::DRAW_INDEXED_BASE) {
                         unsafe {
+web_sys::console::log_1(&format!("draw 5").into());
+//web_sys::console::log_1(&format!("queue 12").into());
+                            #[cfg(target_arch = "wasm32")]
+                            unimplemented!(); // offset?
+                            #[cfg(not(target_arch = "wasm32"))]
                             gl.DrawElementsBaseVertex(
                                 primitive,
                                 index_count as _,
@@ -328,6 +419,11 @@ impl CommandQueue {
                 } else if legacy.contains(LegacyFeatures::DRAW_INDEXED_INSTANCED) {
                     if base_vertex == 0 && instances.start == 0 {
                         unsafe {
+web_sys::console::log_1(&format!("draw 6").into());
+//web_sys::console::log_1(&format!("queue 13").into());
+                            #[cfg(target_arch = "wasm32")]
+                            unimplemented!(); // offset?
+                            #[cfg(not(target_arch = "wasm32"))]
                             gl.DrawElementsInstanced(
                                 primitive,
                                 index_count as _,
@@ -338,6 +434,11 @@ impl CommandQueue {
                         }
                     } else if instances.start == 0 && legacy.contains(LegacyFeatures::DRAW_INDEXED_INSTANCED_BASE_VERTEX) {
                         unsafe {
+web_sys::console::log_1(&format!("draw 7").into());
+//web_sys::console::log_1(&format!("queue 14").into());
+                            #[cfg(target_arch = "wasm32")]
+                            unimplemented!();
+                            #[cfg(not(target_arch = "wasm32"))]
                             gl.DrawElementsInstancedBaseVertex(
                                 primitive,
                                 index_count as _,
@@ -351,6 +452,11 @@ impl CommandQueue {
                         error!("Base vertex with instanced indexed drawing is not supported");
                     } else if legacy.contains(LegacyFeatures::DRAW_INDEXED_INSTANCED_BASE) {
                         unsafe {
+web_sys::console::log_1(&format!("draw 8").into());
+//web_sys::console::log_1(&format!("queue 15").into());
+                            #[cfg(target_arch = "wasm32")]
+                            unimplemented!();
+                            #[cfg(not(target_arch = "wasm32"))]
                             gl.DrawElementsInstancedBaseVertexBaseInstance(
                                 primitive,
                                 index_count as _,
@@ -373,16 +479,27 @@ impl CommandQueue {
                 // If there is no compute support, this pattern should never be reached
                 // because no queue with compute capability can be created.
                 let gl = &self.share.context;
-                unsafe { gl.DispatchCompute(count[0], count[1], count[2]) };
+                unsafe {
+//web_sys::console::log_1(&format!("queue 16").into());
+                    #[cfg(target_arch = "wasm32")]
+                    unimplemented!();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    gl.DispatchCompute(count[0], count[1], count[2]);
+                }
             }
-            com::Command::DispatchIndirect(buffer, offset) => {
+            com::Command::DispatchIndirect(ref buffer, offset) => {
                 // Capability support is given by which queue types will be exposed.
                 // If there is no compute support, this pattern should never be reached
                 // because no queue with compute capability can be created.
                 let gl = &self.share.context;
                 unsafe {
-                    gl.BindBuffer(gl::DRAW_INDIRECT_BUFFER, buffer);
+//web_sys::console::log_1(&format!("queue 17").into());
+                    #[cfg(target_arch = "wasm32")]
+                    unimplemented!();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    gl.BindBuffer(gl::DRAW_INDIRECT_BUFFER, *buffer);
                     // TODO: possible integer conversion issue
+                    #[cfg(not(target_arch = "wasm32"))]
                     gl.DispatchComputeIndirect(offset as _);
                 }
             }
@@ -398,13 +515,27 @@ impl CommandQueue {
                 if num_viewports == 1 {
                     let view = viewports[0];
                     let depth_range  = depth_ranges[0];
-                    unsafe { gl.Viewport(view[0] as i32, view[1] as i32, view[2] as i32, view[3] as i32) };
-                    unsafe { gl.DepthRange(depth_range[0], depth_range[1]) };
+                    unsafe {
+                        //#[cfg(target_arch = "wasm32")]
+                        gl.viewport(view[0] as i32, view[1] as i32, view[2] as i32, view[3] as i32);
+                        //gl.DepthRange(depth_range[0], depth_range[1])
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.Viewport(view[0] as i32, view[1] as i32, view[2] as i32, view[3] as i32);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.DepthRange(depth_range[0], depth_range[1])
+                    }
                 } else if num_viewports > 1 {
                     // Support for these functions is coupled with the support
                     // of multiple viewports.
-                    unsafe { gl.ViewportArrayv(first_viewport, num_viewports as i32, viewports.as_ptr() as *const _) };
-                    unsafe { gl.DepthRangeArrayv(first_viewport, num_viewports as i32, depth_ranges.as_ptr() as *const _) };
+                    unsafe {
+//web_sys::console::log_1(&format!("queue 18").into());
+                        #[cfg(target_arch = "wasm32")]
+                        unimplemented!();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.ViewportArrayv(first_viewport, num_viewports as i32, viewports.as_ptr() as *const _);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.DepthRangeArrayv(first_viewport, num_viewports as i32, depth_ranges.as_ptr() as *const _);
+                    }
                 }
             }
             com::Command::SetScissors(first_scissor, data_ptr) => {
@@ -415,23 +546,46 @@ impl CommandQueue {
 
                 if num_scissors == 1 {
                     let scissor = scissors[0];
-                    unsafe { gl.Scissor(scissor[0], scissor[1], scissor[2], scissor[3]) };
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        gl.scissor(scissor[0], scissor[1], scissor[2], scissor[3]);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.Scissor(scissor[0], scissor[1], scissor[2], scissor[3]);
+                    };
                 } else {
                     // Support for this function is coupled with the support
                     // of multiple viewports.
-                    unsafe { gl.ScissorArrayv(first_scissor, num_scissors as i32, scissors.as_ptr() as *const _) };
+                    unsafe {
+//web_sys::console::log_1(&format!("queue 20").into());
+                        #[cfg(target_arch = "wasm32")]
+                        unimplemented!();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.ScissorArrayv(first_scissor, num_scissors as i32, scissors.as_ptr() as *const _);
+                    };
                 }
             }
             com::Command::SetBlendColor(color) => {
                 state::set_blend_color(&self.share.context, color);
             }
             com::Command::ClearBufferColorF(draw_buffer, cv) => unsafe {
+//web_sys::console::log_1(&format!("queue 21").into());
+                //#[cfg(target_arch = "wasm32")]
+                //unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 self.share.context.ClearBufferfv(gl::COLOR, draw_buffer, cv.as_ptr());
             }
             com::Command::ClearBufferColorU(draw_buffer, cv) => unsafe {
+//web_sys::console::log_1(&format!("queue 22").into());
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 self.share.context.ClearBufferuiv(gl::COLOR, draw_buffer, cv.as_ptr());
             }
             com::Command::ClearBufferColorI(draw_buffer, cv) => unsafe {
+//web_sys::console::log_1(&format!("queue 23").into());
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 self.share.context.ClearBufferiv(gl::COLOR, draw_buffer, cv.as_ptr());
             }
             com::Command::ClearBufferDepthStencil(depth, stencil) => unsafe {
@@ -441,12 +595,19 @@ impl CommandQueue {
                     (None, Some(stencil)) => (gl::STENCIL, 0.0, stencil),
                     _ => unreachable!(),
                 };
-
+//web_sys::console::log_1(&format!("queue 24").into());
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 self.share.context.ClearBufferfi(target, 0, depth, stencil as _);
             }
             com::Command::ClearTexture(_color) => unimplemented!(),
             com::Command::DrawBuffers(draw_buffers) => unsafe {
                 let draw_buffers = Self::get::<gl::types::GLenum>(data_buf, draw_buffers);
+//web_sys::console::log_1(&format!("queue 25").into());
+                //#[cfg(target_arch = "wasm32")]
+                //unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 self.share.context.DrawBuffers(
                     draw_buffers.len() as _,
                     draw_buffers.as_ptr(),
@@ -455,91 +616,167 @@ impl CommandQueue {
             com::Command::BindFrameBuffer(point, frame_buffer) => {
                 if self.share.private_caps.framebuffer {
                     let gl = &self.share.context;
+//web_sys::console::log_1(&format!("queue 26").into());
+                    #[cfg(target_arch = "wasm32")]
+                    unimplemented!();
+                    #[cfg(not(target_arch = "wasm32"))]
                     unsafe { gl.BindFramebuffer(point, frame_buffer) };
                 } else if frame_buffer != 0 {
                     error!("Tried to bind FBO {} without FBO support!", frame_buffer);
                 }
             }
-            com::Command::BindTargetView(point, attachment, view) => {
+            com::Command::BindTargetView(point, attachment, ref view) => {
                 self.bind_target(point, attachment, &view)
             }
             com::Command::SetDrawColorBuffers(num) => {
                 state::bind_draw_color_buffers(&self.share.context, num);
             }
             com::Command::SetPatchSize(num) => unsafe {
+//web_sys::console::log_1(&format!("queue 27").into());
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 self.share.context.PatchParameteri(gl::PATCH_VERTICES, num);
             }
-            com::Command::BindProgram(program) => unsafe {
-                self.share.context.UseProgram(program);
+            com::Command::BindProgram(ref program) => unsafe {
+                #[cfg(target_arch = "wasm32")]
+                self.share.context.use_program(Some(&**program));
+                #[cfg(not(target_arch = "wasm32"))]
+                self.share.context.UseProgram(*program);
             }
             com::Command::BindBlendSlot(slot, ref blend) => {
                 state::bind_blend_slot(&self.share.context, slot, blend);
             }
-            com::Command::BindAttribute(ref attribute, handle, stride, function_type) => unsafe {
+            com::Command::BindAttribute(ref attribute, ref handle, stride, function_type) => unsafe {
                 use native::VertexAttribFunction::*;
 
                 let &native::AttributeDesc { location, size, format, offset, .. } = attribute;
-                let offset = offset as *const gl::types::GLvoid;
+                let offset_void = offset as *const gl::types::GLvoid;
                 let gl = &self.share.context;
-
-                gl.BindBuffer(gl::ARRAY_BUFFER, handle);
+web_sys::console::log_1(&format!("bind_buffer to something for array_buffer in BindAttribute").into());
+                #[cfg(target_arch = "wasm32")]
+                gl.bind_buffer(gl::ARRAY_BUFFER, Some(&**handle));
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.BindBuffer(gl::ARRAY_BUFFER, *handle);
 
                 match function_type {
-                    Float => gl.VertexAttribPointer(location, size, format, gl::FALSE, stride, offset),
-                    Integer => gl.VertexAttribIPointer(location, size, format, stride, offset),
-                    Double => gl.VertexAttribLPointer(location, size, format, stride, offset),
+                    Float => {
+                        #[cfg(target_arch = "wasm32")]
+                        gl.vertex_attrib_pointer_with_i32(location, size, format, false, stride, offset as i32);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.VertexAttribPointer(location, size, format, gl::FALSE, stride, offset_void);
+                    }
+                    Integer => {
+                        #[cfg(target_arch = "wasm32")]
+                        gl.vertex_attrib_i_pointer_with_i32(location, size, format, stride, offset as i32);
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.VertexAttribIPointer(location, size, format, stride, offset_void);
+                    }
+                    Double => {
+                        #[cfg(target_arch = "wasm32")]
+                        unimplemented!();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.VertexAttribLPointer(location, size, format, stride, offset_void);
+                    }
                 }
 
+                #[cfg(target_arch = "wasm32")]
+                gl.enable_vertex_attrib_array(location);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.EnableVertexAttribArray(location);
+
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindBuffer(gl::ARRAY_BUFFER, 0);
+web_sys::console::log_1(&format!("bind_buffer to nothing from BindAttribute end").into());
+                #[cfg(target_arch = "wasm32")]
+                gl.bind_buffer(gl::ARRAY_BUFFER, None);
             }
             /*
             com::Command::UnbindAttribute(ref attribute) => unsafe {
                 self.share.context.DisableVertexAttribArray(attribute.location);
             }*/
-            com::Command::CopyBufferToBuffer(src, dst, ref r) => unsafe {
+            com::Command::CopyBufferToBuffer(ref src, ref dst, ref r) => unsafe {
                 let gl = &self.share.context;
-                gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, src);
-                gl.BindBuffer(gl::PIXEL_PACK_BUFFER, dst);
+//web_sys::console::log_1(&format!("queue 28").into());
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, *src);
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.BindBuffer(gl::PIXEL_PACK_BUFFER, *dst);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.CopyBufferSubData(
                     gl::PIXEL_UNPACK_BUFFER, gl::PIXEL_PACK_BUFFER,
                     r.src as _, r.dst as _, r.size as _,
                 );
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, 0);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindBuffer(gl::PIXEL_PACK_BUFFER, 0);
             }
-            com::Command::CopyBufferToTexture(buffer, texture, ref r) => unsafe {
+            com::Command::CopyBufferToTexture(ref buffer, ref texture, ref r) => unsafe {
                 // TODO: Fix format and active texture
                 assert_eq!(r.image_offset.z, 0);
                 let gl = &self.share.context;
+
+                #[cfg(target_arch = "wasm32")]
+                gl.active_texture(gl::TEXTURE0);
+web_sys::console::log_1(&format!("bind_buffer to something for pixel unpack buffer from CopyBufferToTexture").into());
+                #[cfg(target_arch = "wasm32")]
+                gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, Some(&**buffer));
+                #[cfg(target_arch = "wasm32")]
+                gl.bind_texture(gl::TEXTURE_2D, Some(&**texture));
+                #[cfg(target_arch = "wasm32")]
+                gl.tex_sub_image_2d_with_i32_and_i32_and_u32_and_type_and_i32(
+                    gl::TEXTURE_2D, r.image_layers.level as _,
+                    r.image_offset.x, r.image_offset.y,
+                    r.image_extent.width as _, r.image_extent.height as _,
+                    gl::RGBA, gl::UNSIGNED_BYTE, 0,
+                );
+web_sys::console::log_1(&format!("bind_buffer to nothing for pixel unpack buffer from CopyBufferToTexture").into());
+                gl.bind_buffer(gl::PIXEL_UNPACK_BUFFER, None);
+
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.ActiveTexture(gl::TEXTURE0);
-                gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, buffer);
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, *buffer);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindTexture(gl::TEXTURE_2D, texture);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.TexSubImage2D(
                     gl::TEXTURE_2D, r.image_layers.level as _,
                     r.image_offset.x, r.image_offset.y,
                     r.image_extent.width as _, r.image_extent.height as _,
                     gl::RGBA, gl::UNSIGNED_BYTE, ptr::null(),
                 );
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindBuffer(gl::PIXEL_UNPACK_BUFFER, 0);
             }
             com::Command::CopyBufferToSurface(..) => {
                 unimplemented!() //TODO: use FBO
             }
-            com::Command::CopyTextureToBuffer(texture, buffer, ref r) => unsafe {
+            com::Command::CopyTextureToBuffer(ref texture, ref buffer, ref r) => unsafe {
                 // TODO: Fix format and active texture
                 // TODO: handle partial copies gracefully
                 assert_eq!(r.image_offset, hal::image::Offset { x: 0, y: 0, z: 0 });
                 let gl = &self.share.context;
+//web_sys::console::log_1(&format!("queue 30").into());
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.ActiveTexture(gl::TEXTURE0);
-                gl.BindBuffer(gl::PIXEL_PACK_BUFFER, buffer);
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.BindBuffer(gl::PIXEL_PACK_BUFFER, *buffer);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindTexture(gl::TEXTURE_2D, texture);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.GetTexImage(
                     gl::TEXTURE_2D, r.image_layers.level as _,
                     //r.image_offset.x, r.image_offset.y,
                     //r.image_extent.width as _, r.image_extent.height as _,
                     gl::RGBA, gl::UNSIGNED_BYTE, ptr::null_mut(),
                 );
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindBuffer(gl::PIXEL_PACK_BUFFER, 0);
             }
             com::Command::CopySurfaceToBuffer(..) => {
@@ -551,31 +788,67 @@ impl CommandQueue {
             com::Command::CopyImageToSurface(..) => {
                 unimplemented!() //TODO: use FBO
             }
-            com::Command::BindBufferRange(target, index, buffer, offset, size) => unsafe {
+            com::Command::BindBufferRange(target, index, ref buffer, offset, size) => unsafe {
                 let gl = &self.share.context;
-                gl.BindBufferRange(target, index, buffer, offset, size);
+//web_sys::console::log_1(&format!("queue 1").into());
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
+                gl.BindBufferRange(target, index, *buffer, offset, size);
             }
-            com::Command::BindTexture(index, texture) => unsafe {
+            com::Command::BindTexture(index, ref texture) => unsafe {
                 let gl = &self.share.context;
+                #[cfg(target_arch = "wasm32")]
+                gl.active_texture(gl::TEXTURE0 + index);
+                #[cfg(target_arch = "wasm32")]
+                gl.bind_texture(gl::TEXTURE_2D, Some(&*texture));
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.ActiveTexture(gl::TEXTURE0 + index);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindTexture(gl::TEXTURE_2D, texture);
             }
-            com::Command::BindSampler(index, sampler) => unsafe {
+            com::Command::BindSampler(index, ref sampler) => unsafe {
                 let gl = &self.share.context;
+                #[cfg(target_arch = "wasm32")]
+                gl.bind_sampler(index, Some(&*sampler));
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindSampler(index, sampler);
             }
-            com::Command::SetTextureSamplerSettings(index, texture, ref sinfo) => unsafe {
+            com::Command::SetTextureSamplerSettings(index, ref texture, ref sinfo) => unsafe {
                 let gl = &self.share.context;
+//web_sys::console::log_1(&format!("queue 2").into());
+                #[cfg(target_arch = "wasm32")]
+                unimplemented!();
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.ActiveTexture(gl::TEXTURE0 + index);
+                #[cfg(not(target_arch = "wasm32"))]
                 gl.BindTexture(gl::TEXTURE_2D, texture);
 
                 // TODO: Optimization: only change texture properties that have changed.
                 device::set_sampler_info(
                     &self.share,
                     &sinfo,
-                    |a, b| gl.TexParameterf(gl::TEXTURE_2D, a, b),
-                    |a, b| gl.TexParameterfv(gl::TEXTURE_2D, a, &b[0]),
-                    |a, b| gl.TexParameteri(gl::TEXTURE_2D, a, b),
+                    |a, b| {
+//web_sys::console::log_1(&format!("queue 3").into());
+                        #[cfg(target_arch = "wasm32")]
+                        unimplemented!();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.TexParameterf(gl::TEXTURE_2D, a, b)
+                    },
+                    |a, b| {
+//web_sys::console::log_1(&format!("queue 4").into());
+                        #[cfg(target_arch = "wasm32")]
+                        unimplemented!();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.TexParameterfv(gl::TEXTURE_2D, a, &b[0])
+                    },
+                    |a, b| {
+//web_sys::console::log_1(&format!("queue 5").into());
+                        #[cfg(target_arch = "wasm32")]
+                        unimplemented!();
+                        #[cfg(not(target_arch = "wasm32"))]
+                        gl.TexParameteri(gl::TEXTURE_2D, a, b)
+                    },
                 );
             }
             /*
@@ -687,7 +960,10 @@ impl CommandQueue {
     }
 
     fn signal_fence(&mut self, fence: &native::Fence) {
+        //#[cfg(target_arch = "wasm32")]
+        //unimplemented!();
         if self.share.private_caps.sync {
+            #[cfg(not(target_arch = "wasm32"))]
             let sync = if self.share.private_caps.sync {
                 let gl = &self.share.context;
                 unsafe { gl.FenceSync(gl::SYNC_GPU_COMMANDS_COMPLETE, 0) }
@@ -695,6 +971,7 @@ impl CommandQueue {
                 ptr::null()
             };
 
+            #[cfg(not(target_arch = "wasm32"))]
             fence.0.set(sync);
         }
     }
@@ -727,8 +1004,11 @@ impl hal::queue::RawCommandQueue<Backend> for CommandQueue {
 
                 assert!(buffer.commands.len() >= (cb.buf.offset+cb.buf.size) as usize);
                 let commands = &buffer.commands[cb.buf.offset as usize..(cb.buf.offset+cb.buf.size) as usize];
+web_sys::console::log_1(&format!("submit_raw() calling reset_state").into());
                 self.reset_state();
+web_sys::console::log_1(&format!("submit_raw() starting command processing").into());
                 for com in commands {
+web_sys::console::log_1(&format!("submit_raw() processing command...").into());
                     self.process(com, &buffer.data);
                 }
             }
@@ -767,6 +1047,9 @@ impl hal::queue::RawCommandQueue<Backend> for CommandQueue {
     }
 
     fn wait_idle(&self) -> Result<(), error::HostExecutionError> {
+        #[cfg(target_arch = "wasm32")]
+        unimplemented!();
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe { self.share.context.Finish(); }
         Ok(())
     }

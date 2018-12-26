@@ -81,12 +81,20 @@ impl pool::RawCommandPool<Backend> for RawCommandPool {
     fn allocate(
         &mut self, num: usize, _level: hal::command::RawLevel
     ) -> Vec<RawCommandBuffer> { // TODO: Implement secondary buffers
-        (0..num).map(|_|
-                RawCommandBuffer::new(
-                    self.fbo,
-                    self.limits,
-                    self.memory.clone()))
-                .collect()
+//web_sys::console::log_1(&format!("rawcommandpool::allocate() start for num: {:?}", num).into());
+let cbs = (0..num).map(|_| {
+            let cb = RawCommandBuffer::new(
+                self.fbo,
+                self.limits,
+                self.memory.clone());
+//web_sys::console::log_1(&format!("rawcommandpool::allocate() allocate commandbuffer {:?}", cb.buf).into());
+            cb
+        })
+        .collect::<Vec<_>>();
+for cb in cbs.iter() {
+//web_sys::console::log_1(&format!("rawcommandpool::allocate() allocated commandbuffer {:?}", cb.buf).into());
+}
+cbs
     }
 
     unsafe fn free(&mut self, buffers: Vec<RawCommandBuffer>) {
@@ -98,6 +106,7 @@ impl pool::RawCommandPool<Backend> for RawCommandPool {
         if let BufferMemory::Individual { ref mut storage, .. } = *memory {
             // Expecting that the buffers actually are allocated from this pool.
             for buffer in buffers {
+//web_sys::console::log_1(&format!("free cb {:?}", buffer.cache.primitive.is_none()).into());
                 storage.remove(&buffer.id);
             }
         }

@@ -20,7 +20,6 @@ extern crate serde;
 use std::any::Any;
 use std::error::Error;
 use std::fmt;
-use std::hash::Hash;
 
 //TODO: reconsider what is publicly exported
 
@@ -364,11 +363,31 @@ pub trait Instance: Any + Send + Sync {
     fn enumerate_adapters(&self) -> Vec<Adapter<Self::Backend>>;
 }
 
+#[cfg(target_arch = "wasm32")]
+mod bounds {
+    use std::any::Any;
+    use std::hash::Hash;
+    use std::fmt;
+    pub trait BackendBounds: 'static + Sized + Eq + Clone + Hash + fmt::Debug + Any {}
+    impl<T: 'static + Sized + Eq + Clone + Hash + fmt::Debug + Any> BackendBounds for T {}
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod bounds {
+    use std::any::Any;
+    use std::hash::Hash;
+    use std::fmt;
+    pub trait BackendBounds: 'static + Sized + Eq + Clone + Hash + fmt::Debug + Any + Send + Sync {}
+    impl<T: 'static + Sized + Eq + Clone + Hash + fmt::Debug + Any + Send + Sync> BackendBounds for T {}
+}
+
+use self::bounds::BackendBounds;
+
 /// The `Backend` trait wraps together all the types needed
 /// for a graphics backend. Each backend module, such as OpenGL
 /// or Metal, will implement this trait with its own concrete types.
 #[allow(missing_docs)]
-pub trait Backend: 'static + Sized + Eq + Clone + Hash + fmt::Debug + Any + Send + Sync {
+pub trait Backend: BackendBounds {
     //type Instance:          Instance<Self>;
     type PhysicalDevice:      PhysicalDevice<Self>;
     type Device:              Device<Self>;
@@ -380,27 +399,57 @@ pub trait Backend: 'static + Sized + Eq + Clone + Hash + fmt::Debug + Any + Send
     type CommandQueue:        queue::RawCommandQueue<Self>;
     type CommandBuffer:       command::RawCommandBuffer<Self>;
 
+    #[cfg(not(target_arch = "wasm32"))]
     type ShaderModule:        fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type ShaderModule:        fmt::Debug + Any;
     type RenderPass:          fmt::Debug + Any + Send + Sync;
     type Framebuffer:         fmt::Debug + Any + Send + Sync;
 
     type Memory:              fmt::Debug + Any + Send + Sync;
     type CommandPool:         pool::RawCommandPool<Self>;
 
+    #[cfg(not(target_arch = "wasm32"))]
     type UnboundBuffer:       fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type UnboundBuffer:       fmt::Debug + Any;
+    #[cfg(not(target_arch = "wasm32"))]
     type Buffer:              fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type Buffer:              fmt::Debug + Any;
     type BufferView:          fmt::Debug + Any + Send + Sync;
+    #[cfg(not(target_arch = "wasm32"))]
     type UnboundImage:        fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type UnboundImage:        fmt::Debug + Any;
+    #[cfg(not(target_arch = "wasm32"))]
     type Image:               fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type Image:               fmt::Debug + Any;
+    #[cfg(not(target_arch = "wasm32"))]
     type ImageView:           fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type ImageView:           fmt::Debug + Any;
+    #[cfg(not(target_arch = "wasm32"))]
     type Sampler:             fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type Sampler:             fmt::Debug + Any;
 
+    #[cfg(not(target_arch = "wasm32"))]
     type ComputePipeline:     fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type ComputePipeline:    fmt::Debug + Any;
+    #[cfg(not(target_arch = "wasm32"))]
     type GraphicsPipeline:    fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type GraphicsPipeline:    fmt::Debug + Any;
     type PipelineCache:       fmt::Debug + Any + Send + Sync;
     type PipelineLayout:      fmt::Debug + Any + Send + Sync;
     type DescriptorPool:      pso::DescriptorPool<Self>;
+    #[cfg(not(target_arch = "wasm32"))]
     type DescriptorSet:       fmt::Debug + Any + Send + Sync;
+    #[cfg(target_arch = "wasm32")]
+    type DescriptorSet:       fmt::Debug + Any;
     type DescriptorSetLayout: fmt::Debug + Any + Send + Sync;
 
     type Fence:               fmt::Debug + Any + Send + Sync;

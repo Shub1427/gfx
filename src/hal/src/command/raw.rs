@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::borrow::Borrow;
 use std::ops::Range;
 use std::fmt;
@@ -115,9 +114,25 @@ impl<'a, B: Backend> Default for CommandBufferInheritanceInfo<'a, B> {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+mod bounds {
+    use std::any::Any;
+    pub trait RawCommandBufferBounds: Clone + Any {}
+    impl<T: Clone + Any> RawCommandBufferBounds for T {}
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod bounds {
+    use std::any::Any;
+    pub trait RawCommandBufferBounds: Clone + Any + Send + Sync {}
+    impl<T: Clone + Any + Send + Sync> RawCommandBufferBounds for T {}
+}
+
+use self::bounds::RawCommandBufferBounds;
+
 /// A trait that describes all the operations that must be
 /// provided by a `Backend`'s command buffer.
-pub trait RawCommandBuffer<B: Backend>: Clone + Any + Send + Sync {
+pub trait RawCommandBuffer<B: Backend>: RawCommandBufferBounds {
     /// Begins recording commands to a command buffer.
     fn begin(&mut self, flags: CommandBufferFlags, inheritance_info: CommandBufferInheritanceInfo<B>);
 

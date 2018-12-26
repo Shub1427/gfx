@@ -19,14 +19,21 @@ extern crate gfx_backend_metal as back;
 extern crate gfx_backend_vulkan as back;
 extern crate gfx_hal as hal;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "gl"))]
-use back::glutin::GlContext;
-
 #[cfg(not(target_arch = "wasm32"))]
 extern crate glsl_to_spirv;
 extern crate image;
 #[cfg(not(target_arch = "wasm32"))]
 extern crate winit;
+#[cfg(target_arch = "wasm32")]
+extern crate wasm_bindgen;
+#[cfg(target_arch = "wasm32")]
+extern crate web_sys;
+
+#[cfg(target_arch = "wasm32")]
+use web_sys::console;
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
 
 use hal::format::{AsFormat, ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
 use hal::pass::Subpass;
@@ -69,6 +76,22 @@ const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
     levels: 0..1,
     layers: 0..1,
 };
+
+#[cfg(target_arch = "wasm32")]
+fn log_string(s: &str) {
+    console::log_1(&format!("{}", s).into());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn log_string(s: &str) {
+    println!("{}", s);
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(start)]
+pub fn wasm_main() {
+    main();
+}
 
 #[cfg(any(
     feature = "vulkan",
@@ -116,22 +139,22 @@ fn main() {
     };
 
     for adapter in &adapters {
-        println!("{:?}", adapter.info);
+        log_string(&format!("{:?}", adapter.info));
     }
 
     let mut adapter = adapters.remove(0);
     let memory_types = adapter.physical_device.memory_properties().memory_types;
     let limits = adapter.physical_device.limits();
-
+log_string(&format!("device"));
     // Build a new device and associated command queues
     let (device, mut queue_group) = adapter
         .open_with::<_, hal::Graphics>(1, |family| surface.supports_queue_family(family))
         .unwrap();
-
+log_string(&format!("command pool"));
     let mut command_pool = device
         .create_command_pool_typed(&queue_group, pool::CommandPoolCreateFlags::empty(), 16)
         .expect("Can't create command pool");
-
+log_string(&format!("renderpass"));
     // Setup renderpass and pipeline
     let set_layout = device
         .create_descriptor_set_layout(
@@ -153,7 +176,7 @@ fn main() {
             ],
             &[],
         ).expect("Can't create descriptor set layout");
-
+log_string(&format!("descriptors"));
     // Descriptors
     let mut desc_pool = device
         .create_descriptor_pool(
@@ -170,9 +193,9 @@ fn main() {
             ],
         ).expect("Can't create descriptor pool");
     let desc_set = desc_pool.allocate_set(&set_layout).unwrap();
-
+log_string(&format!("buffer allocations"));
     // Buffer allocations
-    println!("Memory types: {:?}", memory_types);
+    log_string(&format!("Memory types: {:?}", memory_types));
 
     let buffer_stride = std::mem::size_of::<Vertex>() as u64;
     let buffer_len = QUAD.len() as u64 * buffer_stride;
@@ -181,6 +204,7 @@ fn main() {
         .create_buffer(buffer_len, buffer::Usage::VERTEX)
         .unwrap();
     let buffer_req = device.get_buffer_requirements(&buffer_unbound);
+    log_string(&format!("{:?}", memory_types));
 
     let upload_type = memory_types
         .iter()
@@ -200,7 +224,7 @@ fn main() {
     let vertex_buffer = device
         .bind_buffer_memory(&buffer_memory, 0, buffer_unbound)
         .unwrap();
-
+log_string(&format!("vertices"));
     // TODO: check transitions: read/write mapping and vertex buffer read
     {
         let mut vertices = device
@@ -209,7 +233,7 @@ fn main() {
         vertices[0..QUAD.len()].copy_from_slice(&QUAD);
         device.release_mapping_writer(vertices).unwrap();
     }
-
+log_string(&format!("image"));
     // Image
     let img_data = include_bytes!("data/logo.png");
 
@@ -233,21 +257,27 @@ fn main() {
     let image_upload_buffer = device
         .bind_buffer_memory(&image_upload_memory, 0, image_buffer_unbound)
         .unwrap();
-
+log_string(&format!("image into staging buffer"));
     // copy image data into staging buffer
     {
         let mut data = device
             .acquire_mapping_writer::<u8>(&image_upload_memory, 0..image_mem_reqs.size)
             .unwrap();
+//log_string(&format!("cmd_buffer_tmp"));
+//{
+//let mut cmd_buffer = command_pool.acquire_command_buffer::<hal::command::OneShot>(false);
+//}
+//////////////////// BROKEN ON COPY HERE
         for y in 0..height as usize {
             let row = &(*img)
                 [y * (width as usize) * image_stride..(y + 1) * (width as usize) * image_stride];
             let dest_base = y * row_pitch as usize;
             data[dest_base..dest_base + row.len()].copy_from_slice(row);
         }
+/////////////////////////////////////////////
         device.release_mapping_writer(data).unwrap();
     }
-
+log_string(&format!("image unbound"));
     let image_unbound = device
         .create_image(
             kind,
@@ -258,7 +288,7 @@ fn main() {
             i::ViewCapabilities::empty(),
         ).unwrap(); // TODO: usage
     let image_req = device.get_image_requirements(&image_unbound);
-
+log_string(&format!("device type"));
     let device_type = memory_types
         .iter()
         .enumerate()
@@ -268,7 +298,7 @@ fn main() {
         }).unwrap()
         .into();
     let image_memory = device.allocate_memory(device_type, image_req.size).unwrap();
-
+log_string(&format!("image logo"));
     let image_logo = device
         .bind_image_memory(&image_memory, 0, image_unbound)
         .unwrap();
@@ -280,11 +310,11 @@ fn main() {
             Swizzle::NO,
             COLOR_RANGE.clone(),
         ).unwrap();
-
+log_string(&format!("sampler"));
     let sampler = device
         .create_sampler(i::SamplerInfo::new(i::Filter::Linear, i::WrapMode::Clamp))
         .expect("Can't create sampler");
-
+log_string(&format!("write descriptor sets"));
     device.write_descriptor_sets(vec![
         pso::DescriptorSetWrite {
             set: &desc_set,
@@ -302,12 +332,13 @@ fn main() {
 
     let mut frame_semaphore = device.create_semaphore().expect("Can't create semaphore");
     let mut frame_fence = device.create_fence(false).expect("Can't create fence"); // TODO: remove
-
+log_string(&format!("copy buffer to texture"));
     // copy buffer to texture
     {
         let submit = {
+log_string(&format!("acquire command buffer"));
             let mut cmd_buffer = command_pool.acquire_command_buffer(false);
-
+log_string(&format!("image barrier"));
             let image_barrier = m::Barrier::Image {
                 states: (i::Access::empty(), i::Layout::Undefined)
                     ..(i::Access::TRANSFER_WRITE, i::Layout::TransferDstOptimal),
@@ -315,13 +346,14 @@ fn main() {
                 families: None,
                 range: COLOR_RANGE.clone(),
             };
-
+log_string(&format!("pipeline barrier"));
             cmd_buffer.pipeline_barrier(
                 PipelineStage::TOP_OF_PIPE..PipelineStage::TRANSFER,
                 m::Dependencies::empty(),
                 &[image_barrier],
             );
-
+log_string(&format!("copy buffer to image"));
+log_string(&format!("copy buffer to image before, buf {:?}", cmd_buffer.raw.buf));
             cmd_buffer.copy_buffer_to_image(
                 &image_upload_buffer,
                 &image_logo,
@@ -343,7 +375,8 @@ fn main() {
                     },
                 }],
             );
-
+log_string(&format!("copy buffer to image after, buf {:?}", cmd_buffer.raw.buf));
+log_string(&format!("image barrier 2"));
             let image_barrier = m::Barrier::Image {
                 states: (i::Access::TRANSFER_WRITE, i::Layout::TransferDstOptimal)
                     ..(i::Access::SHADER_READ, i::Layout::ShaderReadOnlyOptimal),
@@ -351,15 +384,16 @@ fn main() {
                 families: None,
                 range: COLOR_RANGE.clone(),
             };
+log_string(&format!("pipeline barrier 2"));
             cmd_buffer.pipeline_barrier(
                 PipelineStage::TRANSFER..PipelineStage::FRAGMENT_SHADER,
                 m::Dependencies::empty(),
                 &[image_barrier],
             );
-
+log_string(&format!("finish command buffer"));
             cmd_buffer.finish()
         };
-
+log_string(&format!("submission"));
         let submission = Submission::new().submit(Some(submit));
         queue_group.queues[0].submit(submission, Some(&mut frame_fence));
 
@@ -367,10 +401,10 @@ fn main() {
             .wait_for_fence(&frame_fence, !0)
             .expect("Can't wait for fence");
     }
-
+log_string(&format!("surface compatibility"));
     let (caps, formats, _present_modes, _composite_alphas) =
         surface.compatibility(&mut adapter.physical_device);
-    println!("formats: {:?}", formats);
+    log_string(&format!("formats: {:?}", formats));
     let format = formats.map_or(f::Format::Rgba8Srgb, |formats| {
         formats
             .iter()
@@ -378,15 +412,15 @@ fn main() {
             .map(|format| *format)
             .unwrap_or(formats[0])
     });
-
+log_string(&format!("swapchain config"));
     let swap_config = SwapchainConfig::from_caps(&caps, format, DIMS);
-    println!("{:?}", swap_config);
+    log_string(&format!("{:?}", swap_config));
     let extent = swap_config.extent.to_extent();
 
     let (mut swap_chain, mut backbuffer) = device
         .create_swapchain(&mut surface, swap_config, None)
         .expect("Can't create swapchain");
-
+log_string(&format!("renderpass creation"));
     let render_pass = {
         let attachment = pass::Attachment {
             format: Some(format),
@@ -418,6 +452,7 @@ fn main() {
             .create_render_pass(&[attachment], &[subpass], &[dependency])
             .expect("Can't create render pass")
     };
+log_string(&format!("backbuffer"));
     let (mut frame_images, mut framebuffers) = match backbuffer {
         Backbuffer::Images(images) => {
             let pairs = images
@@ -444,7 +479,7 @@ fn main() {
         }
         Backbuffer::Framebuffer(fbo) => (Vec::new(), vec![fbo]),
     };
-
+log_string(&format!("pipeline nlayout"));
     let pipeline_layout = device
         .create_pipeline_layout(
             std::iter::once(&set_layout),
@@ -461,6 +496,7 @@ fn main() {
                 .collect();
             device.create_shader_module(&spirv).unwrap()
         };
+log_string(&format!("vs shader"));
         #[cfg(target_arch = "wasm32")]
         let vs_module = {
             device.create_shader_module(&vec![]).unwrap()
@@ -475,6 +511,7 @@ fn main() {
                 .collect();
             device.create_shader_module(&spirv).unwrap()
         };
+log_string(&format!("fs shader"));
         #[cfg(target_arch = "wasm32")]
         let fs_module = {
             device.create_shader_module(&vec![]).unwrap()
@@ -509,7 +546,7 @@ fn main() {
                 index: 0,
                 main_pass: &render_pass,
             };
-
+log_string(&format!("pipeline desc"));
             let mut pipeline_desc = pso::GraphicsPipelineDesc::new(
                 shader_entries,
                 Primitive::TriangleList,
@@ -543,7 +580,7 @@ fn main() {
                     offset: 8,
                 },
             });
-
+log_string(&format!("create graphics pipeline"));
             device.create_graphics_pipeline(&pipeline_desc, None)
         };
 
@@ -572,6 +609,8 @@ fn main() {
         height: 0,
     };
     while running {
+//#[cfg(target_arch = "wasm32")]
+running = false;
         #[cfg(not(target_arch = "wasm32"))]
         events_loop.poll_events(|event| {
             if let winit::Event::WindowEvent { event, .. } = event {
@@ -587,7 +626,7 @@ fn main() {
                     }
                     | winit::WindowEvent::CloseRequested => running = false,
                     winit::WindowEvent::Resized(dims) => {
-                        println!("resized to {:?}", dims);
+                        log_string(&format!("resized to {:?}", dims));
                         #[cfg(feature = "gl")]
                         surface
                             .get_window()
@@ -611,7 +650,7 @@ fn main() {
             assert!(formats.iter().any(|fs| fs.contains(&format)));
 
             let swap_config = SwapchainConfig::from_caps(&caps, format, resize_dims);
-            println!("{:?}", swap_config);
+            log_string(&format!("{:?}", swap_config));
             let extent = swap_config.extent.to_extent();
 
             let (new_swap_chain, new_backbuffer) = device
@@ -713,6 +752,7 @@ fn main() {
             recreate_swapchain = true;
         }
     }
+return;
 
     // cleanup!
     device.wait_idle().unwrap();
@@ -751,5 +791,5 @@ fn main() {
     feature = "gl"
 )))]
 fn main() {
-    println!("You need to enable the native API feature (vulkan/metal) in order to test the LL");
+    log_string(&format!("You need to enable the native API feature (vulkan/metal) in order to test the LL"));
 }

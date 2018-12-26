@@ -1,18 +1,23 @@
 #![allow(missing_docs)]
 
+//#[cfg(not(target_arch = "wasm32"))]
 use gl;
+#[cfg(target_arch = "wasm32")]
+use web_sys;
 
 use hal::{self, buffer, command, image, memory, pass, pso, query, ColorSlot};
 use hal::format::ChannelType;
 use hal::range::RangeArg;
 
-use {native as n, Backend};
+use {native as n, Backend, GlBuffer, GlBufferOwned, GlProgram, GlProgramOwned, GlTextureOwned, GlSamplerOwned};
 use pool::{self, BufferMemory};
 
 use std::borrow::Borrow;
 use std::{mem, slice};
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 
 // Command buffer implementation details:
 //
@@ -32,10 +37,12 @@ pub struct BufferSlice {
 
 impl BufferSlice {
     fn new() -> Self {
-        BufferSlice {
-            offset: 0,
-            size: 0,
-        }
+let buffer_slice = BufferSlice {
+    offset: 0,
+    size: 0,
+};
+//web_sys::console::log_1(&format!("created bufferslice {:?}", buffer_slice).into());
+        buffer_slice
     }
 
     // Append a data pointer, resulting in one data pointer
@@ -49,6 +56,7 @@ impl BufferSlice {
             assert_eq!(self.offset + self.size, other.offset);
             self.size += other.size;
         }
+//web_sys::console::log_1(&format!("append bufferslice {:?}", self).into());
     }
 }
 
@@ -56,7 +64,7 @@ impl BufferSlice {
 #[derive(Clone, Debug)]
 pub enum Command {
     Dispatch(hal::WorkGroupCount),
-    DispatchIndirect(gl::types::GLuint, buffer::Offset),
+    DispatchIndirect(GlBufferOwned, buffer::Offset),
     Draw {
         primitive: gl::types::GLenum,
         vertices: Range<hal::VertexCount>,
@@ -70,7 +78,7 @@ pub enum Command {
         base_vertex: hal::VertexOffset,
         instances: Range<hal::InstanceCount>,
     },
-    BindIndexBuffer(gl::types::GLuint),
+    BindIndexBuffer(GlBufferOwned),
     //BindVertexBuffers(BufferSlice),
     SetViewports {
         first_viewport: u32,
@@ -99,22 +107,23 @@ pub enum Command {
     BindTargetView(FrameBufferTarget, AttachmentPoint, n::ImageView),
     SetDrawColorBuffers(usize),
     SetPatchSize(gl::types::GLint),
-    BindProgram(gl::types::GLuint),
+    BindProgram(GlProgramOwned),
     BindBlendSlot(ColorSlot, pso::ColorBlendDesc),
-    BindAttribute(n::AttributeDesc, gl::types::GLuint, gl::types::GLsizei, n::VertexAttribFunction),
+    BindAttribute(n::AttributeDesc, GlBufferOwned, gl::types::GLsizei, n::VertexAttribFunction),
     //UnbindAttribute(n::AttributeDesc),
-    CopyBufferToBuffer(n::RawBuffer, n::RawBuffer, command::BufferCopy),
-    CopyBufferToTexture(n::RawBuffer, n::Texture, command::BufferImageCopy),
-    CopyBufferToSurface(n::RawBuffer, n::Surface, command::BufferImageCopy),
-    CopyTextureToBuffer(n::Texture, n::RawBuffer, command::BufferImageCopy),
-    CopySurfaceToBuffer(n::Surface, n::RawBuffer, command::BufferImageCopy),
-    CopyImageToTexture(n::ImageKind, n::Texture, command::ImageCopy),
+    CopyBufferToBuffer(GlBufferOwned, GlBufferOwned, command::BufferCopy),
+    CopyBufferToTexture(GlBufferOwned, GlTextureOwned, command::BufferImageCopy),
+    CopyBufferToSurface(GlBufferOwned, n::Surface, command::BufferImageCopy),
+    CopyTextureToBuffer(GlTextureOwned, GlBufferOwned, command::BufferImageCopy),
+    CopySurfaceToBuffer(n::Surface, GlBufferOwned, command::BufferImageCopy),
+
+    CopyImageToTexture(n::ImageKind, GlTextureOwned, command::ImageCopy),
     CopyImageToSurface(n::ImageKind, n::Surface, command::ImageCopy),
 
-    BindBufferRange(gl::types::GLenum, gl::types::GLuint, n::RawBuffer, gl::types::GLintptr, gl::types::GLsizeiptr),
-    BindTexture(gl::types::GLenum, n::Texture),
-    BindSampler(gl::types::GLuint, n::Texture),
-    SetTextureSamplerSettings(gl::types::GLuint, n::Texture, image::SamplerInfo),
+    BindBufferRange(gl::types::GLenum, gl::types::GLuint, GlBufferOwned, gl::types::GLintptr, gl::types::GLsizeiptr),
+    BindTexture(gl::types::GLenum, GlTextureOwned),
+    BindSampler(gl::types::GLuint, GlSamplerOwned),
+    SetTextureSamplerSettings(gl::types::GLuint, GlTextureOwned, image::SamplerInfo),
 }
 
 pub type FrameBufferTarget = gl::types::GLenum;
@@ -134,12 +143,42 @@ pub struct RenderPassCache {
     framebuffer: n::FrameBuffer,
     attachment_clears: Vec<AttachmentClear>,
 }
+/*
+fn a() {
+    panic!("a");
+}
+
+impl Drop for RenderPassCache {
+    fn drop(&mut self) {
+        //a();
+        for attachment in self.attachment_clears.iter_mut() {
+            //a();
+            a();
+attachment.subpass_id = None;
+            a();
+            
+            attachment.stencil_value = None;
+            
+            
+            
+            
+            attachment.value = None;
+        }
+        self.render_pass.attachments = Vec::new();
+        self.render_pass.subpasses = Vec::new();
+        a();
+        self.attachment_clears = Vec::new();
+
+    }
+}*/
 
 // Cache current states of the command buffer
 #[derive(Clone)]
-struct Cache {
+//web_sys::console::log_1(&format!("cb {:?}", cb.cache.primitive.is_none()).into());
+pub struct Cache {
     // Active primitive topology, set by the current pipeline.
-    primitive: Option<gl::types::GLenum>,
+//web_sys::console::log_1(&format!("cb {:?}", cb.cache.primitive.is_none()).into());
+pub primitive: Option<gl::types::GLenum>,
     // Active index type, set by the current index buffer.
     index_type: Option<hal::IndexType>,
     // Stencil reference values (front, back).
@@ -154,11 +193,11 @@ struct Cache {
     // Vertices per patch for tessellation primitives (patches).
     patch_size: Option<gl::types::GLint>,
     // Active program name.
-    program: Option<gl::types::GLuint>,
+    program: Option<GlProgramOwned>,
     // Blend per attachment.
     blend_targets: Option<Vec<Option<pso::ColorBlendDesc>>>,
     // Maps bound vertex buffer offset (index) to handle.
-    vertex_buffers: Vec<gl::types::GLuint>,
+    vertex_buffers: Vec<GlBufferOwned>,
     // Active vertex buffer descriptions.
     vertex_buffer_descs: Vec<Option<pso::VertexBufferDesc>>,
     // Active attributes.
@@ -167,7 +206,14 @@ struct Cache {
 
 impl Cache {
     pub fn new() -> Cache {
-        Cache {
+//web_sys::console::log_1(&format!("cache::new() vertex_buffers").into());
+let vertex_buffers = Vec::new();
+//web_sys::console::log_1(&format!("cache::new() vertex_buffer_descs").into());
+let vertex_buffer_descs = Vec::new();
+//web_sys::console::log_1(&format!("cache::new() attributes").into());
+let attributes = Vec::new();
+//web_sys::console::log_1(&format!("cache::new() cache").into());
+        let cache = Cache {
             primitive: None,
             index_type: None,
             stencil_ref: None,
@@ -177,10 +223,12 @@ impl Cache {
             patch_size: None,
             program: None,
             blend_targets: None,
-            vertex_buffers: Vec::new(),
-            vertex_buffer_descs: Vec::new(),
-            attributes: Vec::new(),
-        }
+            vertex_buffers,
+            vertex_buffer_descs,
+            attributes,
+        };
+//web_sys::console::log_1(&format!("cache::new() return cache").into());
+        cache
     }
 }
 
@@ -206,7 +254,7 @@ impl From<hal::Limits> for Limits {
 #[derive(Clone)]
 pub struct RawCommandBuffer {
     pub(crate) memory: Arc<Mutex<BufferMemory>>,
-    pub(crate) buf: BufferSlice,
+pub buf: BufferSlice,
     // Buffer id for the owning command pool.
     // Only relevant if individual resets are allowed.
     pub(crate) id: u64,
@@ -223,7 +271,8 @@ pub struct RawCommandBuffer {
     /// This framebuffer must exist and be configured correctly (with renderbuffer attachments,
     /// etc.) so that rendering to it can occur immediately.
     pub display_fb: n::FrameBuffer,
-    cache: Cache,
+//web_sys::console::log_1(&format!("cb {:?}", cb.cache.primitive.is_none()).into());
+pub cache: Cache,
 
     pass_cache: Option<RenderPassCache>,
     cur_subpass: usize,
@@ -254,6 +303,7 @@ impl RawCommandBuffer {
                 }
             }
         };
+//web_sys::console::log_1(&format!("rawcommandbuffer::new()").into());
 
         RawCommandBuffer {
             memory,
@@ -273,9 +323,28 @@ impl RawCommandBuffer {
     // Soft reset only the buffers, but doesn't free any memory or clears memory
     // of the owning pool.
     pub(crate) fn soft_reset(&mut self) {
+//web_sys::console::log_1(&format!("soft_reset() buf").into());
+//web_sys::console::log_1(&format!("soft_reset() buf {:?}", self.buf).into());
         self.buf = BufferSlice::new();
+//web_sys::console::log_1(&format!("soft_reset() cache").into());
+//web_sys::console::log_1(&format!("soft_reset() cache prim {:?}", self.cache.primitive.is_none()).into());
+//web_sys::console::log_1(&format!("soft_reset() cache prim {:?}", self.cache.primitive).into());
+//web_sys::console::log_1(&format!("soft_reset() cache index {:?}", self.cache.index_type).into());
+//web_sys::console::log_1(&format!("soft_reset() cache stencil {:?}", self.cache.stencil_ref).into());
+//web_sys::console::log_1(&format!("soft_reset() cache blend {:?}", self.cache.blend_color).into());
+//web_sys::console::log_1(&format!("soft_reset() cache fbo {:?}", self.cache.framebuffer).into());
+//web_sys::console::log_1(&format!("soft_reset() cache errstate {:?}", self.cache.error_state).into());
+//web_sys::console::log_1(&format!("soft_reset() cache patch {:?}", self.cache.patch_size).into());
+//web_sys::console::log_1(&format!("soft_reset() cache program {:?}", self.cache.program).into());
+//web_sys::console::log_1(&format!("soft_reset() cache blend target {:?}", self.cache.blend_targets).into());
+//web_sys::console::log_1(&format!("soft_reset() cache vertex_buffers {:?}", self.cache.vertex_buffers).into());
+//web_sys::console::log_1(&format!("soft_reset() cache vb descs {:?}", self.cache.vertex_buffer_descs).into());
+//web_sys::console::log_1(&format!("soft_reset() cache attributes {:?}", self.cache.attributes).into());
         self.cache = Cache::new();
+//web_sys::console::log_1(&format!("end cache").into());
+//web_sys::console::log_1(&format!("pass_cache").into());
         self.pass_cache = None;
+//web_sys::console::log_1(&format!("cur_subpass").into());
         self.cur_subpass = !0;
     }
 
@@ -372,7 +441,7 @@ impl RawCommandBuffer {
                 error!("No vertex buffer bound at {}", binding);
             }
 
-            let handle = vertex_buffers[binding];
+            let handle = &vertex_buffers[binding];
 
             match vertex_buffer_descs.get(binding) {
                 Some(&Some(desc)) => {
@@ -381,7 +450,7 @@ impl RawCommandBuffer {
                         &self.id,
                         &mut self.memory,
                         &mut self.buf,
-                        Command::BindAttribute(*attribute, handle, desc.stride as _, attribute.vertex_attrib_fn)
+                        Command::BindAttribute(*attribute, handle.clone(), desc.stride as _, attribute.vertex_attrib_fn)
                     );
                 }
                 _ => error!("No vertex buffer description bound at {}", binding),
@@ -488,10 +557,15 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
     ) { // TODO: Implement flags!
         if self.individual_reset {
             // Implicit buffer reset when individual reset is set.
+//web_sys::console::log_1(&format!("reset").into());
             self.reset(false);
+//web_sys::console::log_1(&format!("end reset").into());
         } else {
+//web_sys::console::log_1(&format!("soft_reset").into());
             self.soft_reset();
+//web_sys::console::log_1(&format!("end soft_reset").into());
         }
+//web_sys::console::log_1(&format!("11 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn finish(&mut self) {
@@ -503,13 +577,14 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
             error!("Associated pool must allow individual resets.");
             return
         }
-
+//web_sys::console::log_1(&format!("reset() before soft_reset()").into());
         self.soft_reset();
+//web_sys::console::log_1(&format!("reset() after soft_reset()").into());
         let mut memory = self
                 .memory
                 .try_lock()
                 .expect("Trying to reset a command buffer, while memory is in-use.");
-
+//web_sys::console::log_1(&format!("reset() after memory lock").into());
         match *memory {
             // Linear` can't have individual reset ability.
             BufferMemory::Linear(_) => unreachable!(),
@@ -523,7 +598,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                     });
             }
         }
-
+//web_sys::console::log_1(&format!("10 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn pipeline_barrier<'a, T>(
@@ -606,6 +681,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         // Enter first subpass
         self.cur_subpass = 0;
         self.begin_subpass();
+//web_sys::console::log_1(&format!("9 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn next_subpass(&mut self, _contents: command::SubpassContents) {
@@ -638,7 +714,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                 // 2. ClearBuffer
                 let view = match image.kind {
                     n::ImageKind::Surface(id) => n::ImageView::Surface(id),
-                    n::ImageKind::Texture(id) => n::ImageView::Texture(id, 0), //TODO
+                    n::ImageKind::Texture(ref id) => n::ImageView::Texture(id.clone(), 0), //TODO
                 };
                 self.push_cmd(Command::BindFrameBuffer(gl::DRAW_FRAMEBUFFER, fbo));
                 self.push_cmd(Command::BindTargetView(gl::DRAW_FRAMEBUFFER, gl::COLOR_ATTACHMENT0, view));
@@ -655,7 +731,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
             None => {
                 // 1. glClear
                 let text = match image.kind {
-                    n::ImageKind::Texture(id) => id, //TODO
+                    n::ImageKind::Texture(ref id) => id.clone(), //TODO
                     n::ImageKind::Surface(_id) => unimplemented!(),
                 };
 
@@ -663,6 +739,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                 self.push_cmd(Command::ClearTexture(unsafe { color.float32 }));
             }
         }
+//web_sys::console::log_1(&format!("8 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn clear_attachments<T, U>(&mut self, _: T, _: U)
@@ -711,7 +788,8 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         }
 
         self.cache.index_type = Some(ibv.index_type);
-        self.push_cmd(Command::BindIndexBuffer(ibv.buffer.raw));
+//web_sys::console::log_1(&format!("7 cb {:?}", self.cache.primitive.is_none()).into());
+        self.push_cmd(Command::BindIndexBuffer(ibv.buffer.raw.clone()));
     }
 
     fn bind_vertex_buffers<I, T>(&mut self, first_binding: u32, buffers: I)
@@ -719,15 +797,20 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         I: IntoIterator<Item = (T, buffer::Offset)>,
         T: Borrow<n::Buffer>,
     {
+web_sys::console::log_1(&format!("bind_vertex_buffers()").into());
         for (i, (buffer, offset)) in buffers.into_iter().enumerate() {
+web_sys::console::log_1(&format!("bind_vertex_buffers(): buffers i {:?}", i).into());
             let index = first_binding as usize + i;
             if self.cache.vertex_buffers.len() <= index {
-                self.cache.vertex_buffers.resize(index+1, 0);
+                self.cache.vertex_buffers.resize(index + 1, buffer.borrow().raw.clone());
+            } else {
+                self.cache.vertex_buffers[index] = buffer.borrow().raw.clone();
             }
-            self.cache.vertex_buffers[index] = buffer.borrow().raw;
+
             if offset != 0 {
                 error!("Vertex buffer offset {} is not supported", offset);
             }
+//web_sys::console::log_1(&format!("6 cb {:?}", self.cache.primitive.is_none()).into());
         }
     }
 
@@ -767,6 +850,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                 self.cache.error_state = true;
             }
         }
+//web_sys::console::log_1(&format!("5 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn set_scissors<T>(&mut self, first_scissor: u32, scissors: T)
@@ -796,6 +880,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                 self.cache.error_state = true;
             }
         }
+//web_sys::console::log_1(&format!("4 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn set_stencil_reference(&mut self, faces: pso::Face, value: pso::StencilValue) {
@@ -821,6 +906,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         // we assembled all the pieces to set the stencil state
         // from the pipeline.
         self.cache.stencil_ref = Some((front, back));
+//web_sys::console::log_1(&format!("3 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn set_stencil_read_mask(&mut self, _faces: pso::Face, _value: pso::StencilValue) {
@@ -836,6 +922,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
             self.cache.blend_color = Some(cv);
             self.push_cmd(Command::SetBlendColor(cv));
         }
+//web_sys::console::log_1(&format!("2 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn set_depth_bounds(&mut self, _: Range<f32>) {
@@ -854,7 +941,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         let n::GraphicsPipeline {
             primitive,
             patch_size,
-            program,
+            ref program,
             ref blend_targets,
             ref attributes,
             ref vertex_buffers,
@@ -871,16 +958,21 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
             }
         }
 
-        if self.cache.program != Some(program) {
-            self.cache.program = Some(program);
-            self.push_cmd(Command::BindProgram(program));
+        #[cfg(target_arch = "wasm32")]
+        let should_bind = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        let should_bind = self.cache.program != Some(*program);
+        if should_bind {
+            self.cache.program = Some(program.clone());
+            self.push_cmd(Command::BindProgram(program.clone()));
         }
-
+web_sys::console::log_1(&format!("bind_graphics_pipeline attributes {:?}", self.cache.attributes).into());
         self.cache.attributes = attributes.clone();
 
         self.cache.vertex_buffer_descs = vertex_buffers.clone();
 
         self.update_blend_targets(blend_targets);
+//web_sys::console::log_1(&format!("1 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn bind_graphics_descriptor_sets<I, J>(
@@ -895,14 +987,17 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         J: IntoIterator,
         J::Item: Borrow<command::DescriptorSetOffset>,
     {
+//web_sys::console::log_1(&format!("bind graphics sets 1").into());
         assert!(offsets.into_iter().next().is_none()); // TODO: offsets unsupported
 
         let mut set = first_set as _;
         let drd = &*layout.desc_remap_data.read().unwrap();
-
+//web_sys::console::log_1(&format!("bind graphics sets 2").into());
         for desc_set in sets {
+//web_sys::console::log_1(&format!("bind graphics sets 3").into());
             let desc_set = desc_set.borrow();
             let bindings = desc_set.bindings.lock().unwrap();
+//web_sys::console::log_1(&format!("bind graphics sets 4").into());
             for new_binding in &*bindings {
                 match new_binding {
                     n::DescSetBindings::Buffer {ty: btype, binding, buffer, offset, size} => {
@@ -910,33 +1005,42 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                             n::BindingTypes::UniformBuffers => gl::UNIFORM_BUFFER,
                             n::BindingTypes::Images => panic!("Wrong desc set binding"),
                         };
+//web_sys::console::log_1(&format!("bind graphics sets 5").into());
                         for binding in drd.get_binding(n::BindingTypes::UniformBuffers, set, *binding).unwrap() {
                             self.push_cmd(Command::BindBufferRange(
                                 btype,
                                 *binding,
-                                *buffer,
+                                buffer.clone(),
                                 *offset,
                                 *size,
                             ))
                         }
+//web_sys::console::log_1(&format!("bind graphics sets 6").into());
                     }
-                    n::DescSetBindings::Texture(binding, texture) => {
+                    n::DescSetBindings::Texture(binding, ref texture) => {
+//web_sys::console::log_1(&format!("bind graphics sets 7").into());
+#[cfg(not(target_arch = "wasm32"))]
                         for binding in drd.get_binding(n::BindingTypes::Images, set, *binding).unwrap() {
                             self.push_cmd(Command::BindTexture(
                                 *binding,
-                                *texture,
+                                texture.clone(),
                             ))
                         }
+//web_sys::console::log_1(&format!("bind graphics sets 8").into());
                     }
-                    n::DescSetBindings::Sampler(binding, sampler) => {
+                    n::DescSetBindings::Sampler(binding, ref sampler) => {
+//web_sys::console::log_1(&format!("bind graphics sets 9").into());
+#[cfg(not(target_arch = "wasm32"))]
                         for binding in drd.get_binding(n::BindingTypes::Images, set, *binding).unwrap() {
                             self.push_cmd(Command::BindSampler(
                                 *binding,
-                                *sampler,
+                                sampler.clone(),
                             ))
                         }
+//web_sys::console::log_1(&format!("bind graphics sets 10").into());
                     }
                     n::DescSetBindings::SamplerInfo(binding, sinfo) => {
+//web_sys::console::log_1(&format!("bind graphics sets 11").into());
                         let mut all_txts = drd
                             .get_binding(n::BindingTypes::Images, set, *binding).unwrap()
                             .into_iter()
@@ -944,10 +1048,10 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                                 bindings
                                     .iter()
                                     .filter_map(move |b|
-                                        if let n::DescSetBindings::Texture(b, t) = b {
+                                        if let n::DescSetBindings::Texture(b, ref t) = b {
                                             let nbs = drd.get_binding(n::BindingTypes::Images, set, *b)?;
                                             if nbs.contains(binding) {
-                                                Some((*binding, *t))
+                                                Some((*binding, t.clone()))
                                             } else {
                                                 None
                                             }
@@ -955,13 +1059,15 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                                     )
                             )
                             .collect::<Vec<_>>();
-
+//web_sys::console::log_1(&format!("bind graphics sets 12").into());
                         // TODO: Check that other samplers aren't using the same
                         // textures as in `all_txts` unless all the bindings of that
                         // texture are gonna be unbound or the two samplers have
                         // identical properties.
 
+                        #[cfg(not(target_arch = "wasm32"))] // TODO
                         all_txts.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+                        #[cfg(not(target_arch = "wasm32"))] // TODO
                         all_txts.dedup_by(|a, b| a.1 == b.1);
 
                         for (binding, txt) in all_txts {
@@ -971,22 +1077,31 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                                 sinfo.clone(),
                             ))
                         }
+//web_sys::console::log_1(&format!("bind graphics sets 13").into());
                     }
                 }
             }
             set += 1;
         }
+//web_sys::console::log_1(&format!("bind graphics sets 14").into());
     }
 
     fn bind_compute_pipeline(&mut self, pipeline: &n::ComputePipeline) {
         let n::ComputePipeline {
-            program,
+            ref program,
         } = *pipeline;
 
-        if self.cache.program != Some(program) {
-            self.cache.program = Some(program);
-            self.push_cmd(Command::BindProgram(program));
+        #[cfg(target_arch = "wasm32")]
+        let should_bind = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        let should_bind = self.cache.program != Some(*program);
+
+        if should_bind {
+            self.cache.program = Some(program.clone());
+            self.push_cmd(Command::BindProgram(program.clone()));
         }
+
+//web_sys::console::log_1(&format!("12 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn bind_compute_descriptor_sets<I, J>(
@@ -1006,10 +1121,12 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
 
     fn dispatch(&mut self, count: hal::WorkGroupCount) {
         self.push_cmd(Command::Dispatch(count));
+//web_sys::console::log_1(&format!("13 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn dispatch_indirect(&mut self, buffer: &n::Buffer, offset: buffer::Offset) {
-        self.push_cmd(Command::DispatchIndirect(buffer.raw, offset));
+        self.push_cmd(Command::DispatchIndirect(buffer.raw.clone(), offset));
+//web_sys::console::log_1(&format!("14 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn copy_buffer<T>(&mut self, src: &n::Buffer, dst: &n::Buffer, regions: T)
@@ -1021,13 +1138,14 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
 
         for region in regions {
             let r = region.borrow().clone();
-            let cmd = Command::CopyBufferToBuffer(src.raw, dst.raw, r);
+            let cmd = Command::CopyBufferToBuffer(src.raw.clone(), dst.raw.clone(), r);
             self.push_cmd(cmd);
         }
 
         if self.buf.offset == old_offset {
             error!("At least one region must be specified");
         }
+//web_sys::console::log_1(&format!("15 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn copy_image<T>(
@@ -1046,8 +1164,8 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         for region in regions {
             let r = region.borrow().clone();
             let cmd = match dst.kind {
-                n::ImageKind::Surface(s) => Command::CopyImageToSurface(src.kind, s, r),
-                n::ImageKind::Texture(t) => Command::CopyImageToTexture(src.kind, t, r),
+                n::ImageKind::Surface(ref s) => Command::CopyImageToSurface(src.kind.clone(), s.clone(), r),
+                n::ImageKind::Texture(ref t) => Command::CopyImageToTexture(src.kind.clone(), t.clone(), r),
             };
             self.push_cmd(cmd);
         }
@@ -1055,6 +1173,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         if self.buf.offset == old_offset {
             error!("At least one region must be specified");
         }
+//web_sys::console::log_1(&format!("16 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
      fn copy_buffer_to_image<T>(
@@ -1072,8 +1191,8 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         for region in regions {
             let r = region.borrow().clone();
             let cmd = match dst.kind {
-                n::ImageKind::Surface(s) => Command::CopyBufferToSurface(src.raw, s, r),
-                n::ImageKind::Texture(t) => Command::CopyBufferToTexture(src.raw, t, r),
+                n::ImageKind::Surface(s) => Command::CopyBufferToSurface(src.raw.clone(), s, r),
+                n::ImageKind::Texture(ref t) => Command::CopyBufferToTexture(src.raw.clone(), t.clone(), r),
             };
             self.push_cmd(cmd);
         }
@@ -1081,6 +1200,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         if self.buf.size == old_size {
             error!("At least one region must be specified");
         }
+//web_sys::console::log_1(&format!("17 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn copy_image_to_buffer<T>(
@@ -1098,8 +1218,8 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         for region in regions {
             let r = region.borrow().clone();
             let cmd = match src.kind {
-                n::ImageKind::Surface(s) => Command::CopySurfaceToBuffer(s, dst.raw, r),
-                n::ImageKind::Texture(t) => Command::CopyTextureToBuffer(t, dst.raw, r),
+                n::ImageKind::Surface(s) => Command::CopySurfaceToBuffer(s, dst.raw.clone(), r),
+                n::ImageKind::Texture(ref t) => Command::CopyTextureToBuffer(t.clone(), dst.raw.clone(), r),
             };
             self.push_cmd(cmd);
         }
@@ -1107,6 +1227,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         if self.buf.size == old_size {
             error!("At least one region must be specified");
         }
+//web_sys::console::log_1(&format!("18 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn draw(
@@ -1115,7 +1236,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
         instances: Range<hal::InstanceCount>,
     ) {
         self.bind_attributes();
-
+web_sys::console::log_1(&format!("draw() primitive {:?}", self.cache.primitive).into());
         match self.cache.primitive {
             Some(primitive) => {
                 self.push_cmd(
@@ -1131,6 +1252,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                 self.cache.error_state = true;
             }
         }
+//web_sys::console::log_1(&format!("19 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn draw_indexed(
@@ -1168,6 +1290,7 @@ impl command::RawCommandBuffer<Backend> for RawCommandBuffer {
                 self.cache.error_state = true;
             }
         }
+//web_sys::console::log_1(&format!("20 cb {:?}", self.cache.primitive.is_none()).into());
     }
 
     fn draw_indirect(

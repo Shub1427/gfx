@@ -1,21 +1,21 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::{Arc, Mutex, RwLock};
+use std::fmt;
+
+#[cfg(target_arch = "wasm32")]
+use std::rc::Rc;
 
 use hal::{format, image as i, pass, pso};
 use hal::memory::Properties;
 use hal::backend::FastHashMap;
 
 use gl;
-use Backend;
+use {Backend, GlBuffer, GlBufferOwned, GlProgram, GlProgramOwned, GlShaderOwned, GlTextureOwned, GlSamplerOwned};
 
 
-pub type RawBuffer   = gl::types::GLuint;
-pub type Shader      = gl::types::GLuint;
-pub type Program     = gl::types::GLuint;
+pub type Program     = GlProgram;
 pub type FrameBuffer = gl::types::GLuint;
 pub type Surface     = gl::types::GLuint;
-pub type Texture     = gl::types::GLuint;
-pub type Sampler     = gl::types::GLuint;
 
 pub type DescriptorSetLayout = Vec<pso::DescriptorSetLayoutBinding>;
 
@@ -23,7 +23,7 @@ pub const DEFAULT_FRAMEBUFFER: FrameBuffer = 0;
 
 #[derive(Debug)]
 pub struct Buffer {
-    pub(crate) raw: RawBuffer,
+    pub(crate) raw: GlBufferOwned,
     pub(crate) target: gl::types::GLenum,
     pub(crate) size: u64,
 }
@@ -110,7 +110,7 @@ impl DescRemapData {
 
 #[derive(Clone, Debug)]
 pub struct GraphicsPipeline {
-    pub(crate) program: Program,
+    pub(crate) program: GlProgramOwned,
     pub(crate) primitive: gl::types::GLenum,
     pub(crate) patch_size: Option<gl::types::GLint>,
     pub(crate) blend_targets: Vec<pso::ColorBlendDesc>,
@@ -120,48 +120,48 @@ pub struct GraphicsPipeline {
 
 #[derive(Clone, Debug)]
 pub struct ComputePipeline {
-    pub(crate) program: Program,
+    pub(crate) program: GlProgramOwned,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub struct Image {
     pub(crate) kind: ImageKind,
     // Required for clearing operations
     pub(crate) channel: format::ChannelType,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub enum ImageKind {
     Surface(Surface),
-    Texture(Texture),
+    Texture(GlTextureOwned),
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Debug)]
 /// Additionally storing the `SamplerInfo` for older OpenGL versions, which
 /// don't support separate sampler objects.
 pub enum FatSampler {
-    Sampler(Sampler),
+    Sampler(GlSamplerOwned),
     Info(i::SamplerInfo),
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub enum ImageView {
     Surface(Surface),
-    Texture(Texture, i::Level),
-    TextureLayer(Texture, i::Level, i::Layer),
+    Texture(GlTextureOwned, i::Level),
+    TextureLayer(GlTextureOwned, i::Level, i::Layer),
 }
 
-#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum DescSetBindings {
     Buffer {
         ty: BindingTypes,
         binding: pso::DescriptorBinding,
-        buffer: RawBuffer,
+        buffer: GlBufferOwned,
         offset: gl::types::GLintptr,
         size: gl::types::GLsizeiptr
     },
-    Texture(pso::DescriptorBinding, Texture),
-    Sampler(pso::DescriptorBinding, Sampler),
+    Texture(pso::DescriptorBinding, GlTextureOwned),
+    Sampler(pso::DescriptorBinding, GlSamplerOwned),
     SamplerInfo(pso::DescriptorBinding, i::SamplerInfo),
 }
 
@@ -194,18 +194,34 @@ impl pso::DescriptorPool<Backend> for DescriptorPool {
     }
 }
 
-#[derive(Clone, Debug, Hash)]
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Debug)]
 pub enum ShaderModule {
-    Raw(Shader),
+    Raw(GlShaderOwned),
     Spirv(Vec<u8>),
 }
 
-#[derive(Debug)]
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Hash)]
+pub enum ShaderModule {
+    Raw(GlShaderOwned),
+    Spirv(Vec<u8>),
+}
+
 pub struct Memory {
     pub(crate) properties: Properties,
-    pub(crate) first_bound_buffer: Cell<RawBuffer>,
+    pub(crate) first_bound_buffer: RefCell<Option<GlBufferOwned>>,
     /// Allocation size
     pub(crate) size: u64,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) mapped_memory: RefCell<Option<*mut u8>>,
+}
+
+// TODO
+impl fmt::Debug for Memory {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Memory")
+    }
 }
 
 unsafe impl Send for Memory {}
@@ -223,11 +239,14 @@ impl Memory {
     pub fn map_flags(&self) -> gl::types::GLenum {
         let mut flags = 0;
         if self.can_download() {
+web_sys::console::log_1(&format!("map_flags() can download {:?}", gl::MAP_READ_BIT).into());
             flags |= gl::MAP_READ_BIT;
         }
         if self.can_upload() {
+web_sys::console::log_1(&format!("map_flags() can upload {:?}", gl::MAP_WRITE_BIT).into());
             flags |= gl::MAP_WRITE_BIT;
         }
+web_sys::console::log_1(&format!("map_flags() result {:?}", flags).into());
         flags
     }
 }
